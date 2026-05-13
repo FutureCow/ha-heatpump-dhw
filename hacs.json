@@ -1,6 +1,4 @@
 {
   "name": "Heat Pump DHW",
-  "render_readme": true,
-  "domains": ["sensor", "switch", "number"],
-  "iot_class": "local_polling"
+  "render_readme": true
 }
