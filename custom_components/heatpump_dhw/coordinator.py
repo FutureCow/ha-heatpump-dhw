@@ -1,0 +1,657 @@
+"""Central coordinator — reads sensors, decides mode, controls hardware."""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta, time as dt_time
+from statistics import mean
+from typing import Any
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.storage import Store
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import dt as dt_util
+
+from .const import (
+    ANTI_BLOCK_RUN_MINUTES,
+    CONF_BOILER_TEMP_SENSOR,
+    CONF_DYNAMIC_PRICE_SENSOR,
+    CONF_EHEATER_SWITCH,
+    CONF_HEATPUMP_SWITCH,
+    CONF_NOTIFY_SERVICE,
+    CONF_OUTSIDE_TEMP_SENSOR,
+    CONF_POWER_SENSOR,
+    CONF_PRESENCE_SENSOR,
+    CONF_PV_SURPLUS_SENSOR,
+    CONF_SHOWER_SCHEDULES,
+    CONF_TARGET_TEMP_ENTITY,
+    CONF_WEATHER_ENTITY,
+    DEFAULT_ANTI_BLOCK_DAYS,
+    DEFAULT_BOOST_TEMP,
+    DEFAULT_BOOST_THRESHOLD_W,
+    DEFAULT_LEGIONELLA_DAY,
+    DEFAULT_LEGIONELLA_HOUR,
+    DEFAULT_LEGIONELLA_TEMP,
+    DEFAULT_NORMAL_TEMP,
+    DEFAULT_PREDICTIVE_HEATING,
+    DEFAULT_PRICE_THRESHOLD_EUR,
+    DEFAULT_REFERENCE_PRICE_EUR,
+    DEFAULT_SOLAR_THRESHOLD_W,
+    DEFAULT_TANK_VOLUME_L,
+    DEFAULT_VACATION_MIN_TEMP,
+    DOMAIN,
+    HEAT_UP_SAMPLE_SIZE,
+    MIN_CYCLE_MINUTES,
+    MODE_ANTI_BLOCK,
+    MODE_BOOST,
+    MODE_IDLE,
+    MODE_LEGIONELLA,
+    MODE_PRICE,
+    MODE_SCHEDULE,
+    MODE_SOLAR,
+    MODE_VACATION,
+    OPT_ANTI_BLOCK_DAYS,
+    OPT_BOOST_MODE_ENABLED,
+    OPT_BOOST_TEMP,
+    OPT_BOOST_THRESHOLD_W,
+    OPT_LEGIONELLA_DAY,
+    OPT_LEGIONELLA_HOUR,
+    OPT_LEGIONELLA_MODE_ENABLED,
+    OPT_LEGIONELLA_TEMP,
+    OPT_NORMAL_TEMP,
+    OPT_PREDICTIVE_HEATING,
+    OPT_PRICE_MODE_ENABLED,
+    OPT_PRICE_THRESHOLD_EUR,
+    OPT_REFERENCE_PRICE_EUR,
+    OPT_SOLAR_MODE_ENABLED,
+    OPT_SOLAR_THRESHOLD_W,
+    OPT_TANK_VOLUME_L,
+    OPT_VACATION_MIN_TEMP,
+    STORAGE_KEY,
+    STORAGE_VERSION,
+    SUNNY_CONDITIONS,
+    TEMP_HYSTERESIS,
+    UPDATE_INTERVAL,
+    WATER_SPECIFIC_HEAT_KJ,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class DHWCoordinator(DataUpdateCoordinator):
+    """Polls sensors, determines heating mode, and controls the boiler."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+        )
+        self.entry = entry
+        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+
+        # Runtime state
+        self._active_mode: str = MODE_IDLE
+        self._heating: bool = False
+        self._last_switch_time: datetime | None = None
+        self._anti_block_start: datetime | None = None
+
+        # Session tracking
+        self._session_start: datetime | None = None
+        self._session_start_temp: float | None = None
+        self._last_session: dict = {}
+
+        # Persisted data (loaded from storage)
+        self._heat_up_samples: list[float] = []
+        self._cop_samples: list[float] = []
+        self._last_legionella_run: datetime | None = None
+        self._last_pump_run: datetime | None = None
+        self._monthly_savings: float = 0.0
+        self._savings_month: int = datetime.now().month
+
+        # Mode switches — toggled by switch entities
+        self.solar_mode_enabled: bool = True
+        self.price_mode_enabled: bool = True
+        self.boost_mode_enabled: bool = True
+        self.legionella_mode_enabled: bool = True
+        self.vacation_mode_enabled: bool = False
+
+        # Track sent shower warnings to avoid spam
+        self._shower_warning_sent: set[str] = set()
+
+        self._next_heating: datetime | None = None
+
+    # ------------------------------------------------------------------
+    # Setup / teardown
+    # ------------------------------------------------------------------
+
+    async def async_setup(self) -> None:
+        stored = await self._store.async_load() or {}
+        self._heat_up_samples = stored.get("heat_up_samples", [])
+        self._cop_samples = stored.get("cop_samples", [])
+        raw_ll = stored.get("last_legionella_run")
+        self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
+        raw_lp = stored.get("last_pump_run")
+        self._last_pump_run = datetime.fromisoformat(raw_lp) if raw_lp else None
+        self._monthly_savings = stored.get("monthly_savings", 0.0)
+        self._savings_month = stored.get("savings_month", datetime.now().month)
+        self._last_session = stored.get("last_session", {})
+
+        opts = self.entry.options
+        self.solar_mode_enabled = opts.get(OPT_SOLAR_MODE_ENABLED, True)
+        self.price_mode_enabled = opts.get(OPT_PRICE_MODE_ENABLED, True)
+        self.boost_mode_enabled = opts.get(OPT_BOOST_MODE_ENABLED, True)
+        self.legionella_mode_enabled = opts.get(OPT_LEGIONELLA_MODE_ENABLED, True)
+
+    async def async_shutdown(self) -> None:
+        await self._save_state()
+
+    async def _save_state(self) -> None:
+        await self._store.async_save(
+            {
+                "heat_up_samples": self._heat_up_samples[-HEAT_UP_SAMPLE_SIZE:],
+                "cop_samples": self._cop_samples[-HEAT_UP_SAMPLE_SIZE:],
+                "last_legionella_run": self._last_legionella_run.isoformat() if self._last_legionella_run else None,
+                "last_pump_run": self._last_pump_run.isoformat() if self._last_pump_run else None,
+                "monthly_savings": self._monthly_savings,
+                "savings_month": self._savings_month,
+                "last_session": self._last_session,
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Options / config helpers
+    # ------------------------------------------------------------------
+
+    def _opt(self, key: str, default):
+        return self.entry.options.get(key, default)
+
+    @property
+    def cfg(self):
+        return self.entry.data
+
+    # ------------------------------------------------------------------
+    # Sensor reading helpers
+    # ------------------------------------------------------------------
+
+    def _state_float(self, entity_id: str | None) -> float | None:
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable", ""):
+            return None
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return None
+
+    def _state_bool(self, entity_id: str | None) -> bool | None:
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None:
+            return None
+        return state.state in ("on", "home", "true", "True")
+
+    def _weather_forecast_tomorrow_sunny(self) -> bool:
+        """Return True if tomorrow morning's forecast looks sunny."""
+        entity_id = self.cfg.get(CONF_WEATHER_ENTITY)
+        if not entity_id:
+            return False
+        state = self.hass.states.get(entity_id)
+        if not state:
+            return False
+        forecast = state.attributes.get("forecast", [])
+        tomorrow = (dt_util.now() + timedelta(days=1)).date()
+        for entry in forecast:
+            try:
+                entry_date = datetime.fromisoformat(entry.get("datetime", "")).date()
+            except (ValueError, TypeError):
+                continue
+            if entry_date == tomorrow:
+                return entry.get("condition", "") in SUNNY_CONDITIONS
+        return False
+
+    # ------------------------------------------------------------------
+    # Core update loop
+    # ------------------------------------------------------------------
+
+    async def _async_update_data(self) -> dict[str, Any]:
+        now = dt_util.now()
+
+        boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
+        power_w = self._state_float(self.cfg.get(CONF_POWER_SENSOR))
+        surplus_w = self._state_float(self.cfg.get(CONF_PV_SURPLUS_SENSOR))
+        price_eur = self._state_float(self.cfg.get(CONF_DYNAMIC_PRICE_SENSOR))
+        outside_temp = self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR))
+        present = self._state_bool(self.cfg.get(CONF_PRESENCE_SENSOR))
+
+        desired_mode, desired_temp = self._decide_mode(
+            now, boiler_temp, surplus_w, price_eur, present
+        )
+
+        await self._apply_control(desired_mode, desired_temp, boiler_temp, power_w, now)
+        await self._track_session(boiler_temp, power_w, price_eur, outside_temp, now)
+        await self._check_shower_readiness(now, boiler_temp)
+
+        self._next_heating = self._calc_next_heating(now)
+
+        if now.month != self._savings_month:
+            self._monthly_savings = 0.0
+            self._savings_month = now.month
+
+        await self._save_state()
+
+        return {
+            "boiler_temp": boiler_temp,
+            "power_w": power_w,
+            "surplus_w": surplus_w,
+            "price_eur": price_eur,
+            "outside_temp": outside_temp,
+            "active_mode": self._active_mode,
+            "heating": self._heating,
+            "session_kwh": self._last_session.get("kwh", 0.0),
+            "session_cost": self._last_session.get("cost", 0.0),
+            "session_savings": self._last_session.get("savings", 0.0),
+            "session_cop": self._last_session.get("cop"),
+            "avg_cop": mean(self._cop_samples) if self._cop_samples else None,
+            "next_heating": self._next_heating.isoformat() if self._next_heating else None,
+            "heat_up_duration_min": round(mean(self._heat_up_samples)) if self._heat_up_samples else None,
+            "monthly_savings": self._monthly_savings,
+            "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp),
+        }
+
+    # ------------------------------------------------------------------
+    # Mode decision — priority order
+    # ------------------------------------------------------------------
+
+    def _decide_mode(
+        self,
+        now: datetime,
+        boiler_temp: float | None,
+        surplus_w: float | None,
+        price_eur: float | None,
+        present: bool | None,
+    ) -> tuple[str, float]:
+        normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+
+        # 1. Anti-block: force short run if pump idle too long
+        anti_block_days = self._opt(OPT_ANTI_BLOCK_DAYS, DEFAULT_ANTI_BLOCK_DAYS)
+        idle_days = (
+            (now - self._last_pump_run).total_seconds() / 86400
+            if self._last_pump_run else 999
+        )
+        if idle_days >= anti_block_days:
+            if self._anti_block_start is None:
+                self._anti_block_start = now
+            elapsed_min = (now - self._anti_block_start).total_seconds() / 60
+            if elapsed_min < ANTI_BLOCK_RUN_MINUTES:
+                return MODE_ANTI_BLOCK, normal_temp
+            # Run completed — reset
+            self._anti_block_start = None
+            self._last_pump_run = now
+
+        # 2. Legionella — weekly safety run
+        if self.legionella_mode_enabled and self._is_legionella_time(now):
+            leg_temp = self._opt(OPT_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)
+            if boiler_temp is None or boiler_temp < leg_temp - TEMP_HYSTERESIS:
+                return MODE_LEGIONELLA, leg_temp
+
+        # 3. Boost — very large solar surplus
+        boost_threshold = self._opt(OPT_BOOST_THRESHOLD_W, DEFAULT_BOOST_THRESHOLD_W)
+        boost_temp = self._opt(OPT_BOOST_TEMP, DEFAULT_BOOST_TEMP)
+        if (
+            self.boost_mode_enabled
+            and surplus_w is not None
+            and surplus_w >= boost_threshold
+            and (boiler_temp is None or boiler_temp < boost_temp - TEMP_HYSTERESIS)
+        ):
+            return MODE_BOOST, boost_temp
+
+        # 4. Solar — moderate surplus
+        solar_threshold = self._opt(OPT_SOLAR_THRESHOLD_W, DEFAULT_SOLAR_THRESHOLD_W)
+        if (
+            self.solar_mode_enabled
+            and surplus_w is not None
+            and surplus_w >= solar_threshold
+            and (boiler_temp is None or boiler_temp < normal_temp - TEMP_HYSTERESIS)
+        ):
+            return MODE_SOLAR, normal_temp
+
+        # 5. Dynamic price — skip if tomorrow looks sunny (predictive: wait for free solar)
+        price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
+        predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
+        if (
+            self.price_mode_enabled
+            and price_eur is not None
+            and price_eur <= price_threshold
+            and not (predictive and self._weather_forecast_tomorrow_sunny())
+            and (boiler_temp is None or boiler_temp < normal_temp - TEMP_HYSTERESIS)
+        ):
+            return MODE_PRICE, normal_temp
+
+        # 6. Shower schedule — pre-heat before planned shower
+        schedule_mode, schedule_temp = self._check_schedule(now, boiler_temp)
+        if schedule_mode:
+            return MODE_SCHEDULE, schedule_temp or normal_temp
+
+        # 7. Vacation — hold minimum temperature
+        if self.vacation_mode_enabled or present is False:
+            min_temp = self._opt(OPT_VACATION_MIN_TEMP, DEFAULT_VACATION_MIN_TEMP)
+            if boiler_temp is None or boiler_temp < min_temp - TEMP_HYSTERESIS:
+                return MODE_VACATION, min_temp
+
+        return MODE_IDLE, normal_temp
+
+    def _is_legionella_time(self, now: datetime) -> bool:
+        ll_day = int(self._opt(OPT_LEGIONELLA_DAY, DEFAULT_LEGIONELLA_DAY))
+        ll_hour = int(self._opt(OPT_LEGIONELLA_HOUR, DEFAULT_LEGIONELLA_HOUR))
+        if now.weekday() != ll_day or now.hour != ll_hour:
+            return False
+        if self._last_legionella_run is not None and (now - self._last_legionella_run).days < 6:
+            return False
+        return True
+
+    def _check_schedule(
+        self, now: datetime, boiler_temp: float | None
+    ) -> tuple[bool, float | None]:
+        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
+        heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
+        normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+
+        for sched in schedules:
+            days = sched.get("days", list(range(7)))
+            if now.weekday() not in days:
+                continue
+            shower_time = dt_time.fromisoformat(sched.get("time", "07:30"))
+            required_temp = sched.get("temp", normal_temp)
+            shower_dt = now.replace(
+                hour=shower_time.hour, minute=shower_time.minute, second=0, microsecond=0
+            )
+            if shower_dt < now:
+                shower_dt += timedelta(days=1)
+            start_at = shower_dt - timedelta(minutes=heat_up_min + 10)
+            if start_at <= now <= shower_dt:
+                if boiler_temp is None or boiler_temp < required_temp - TEMP_HYSTERESIS:
+                    return True, required_temp
+
+        return False, None
+
+    def _calc_next_heating(self, now: datetime) -> datetime | None:
+        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
+        heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
+        candidates: list[datetime] = []
+        for sched in schedules:
+            days = sched.get("days", list(range(7)))
+            shower_time = dt_time.fromisoformat(sched.get("time", "07:30"))
+            for offset in range(7):
+                candidate = now + timedelta(days=offset)
+                if candidate.weekday() not in days:
+                    continue
+                shower_dt = datetime.combine(candidate.date(), shower_time, tzinfo=now.tzinfo)
+                start_dt = shower_dt - timedelta(minutes=heat_up_min + 10)
+                if start_dt > now:
+                    candidates.append(start_dt)
+                    break
+        return min(candidates) if candidates else None
+
+    # ------------------------------------------------------------------
+    # Hardware control
+    # ------------------------------------------------------------------
+
+    async def _apply_control(
+        self,
+        mode: str,
+        desired_temp: float,
+        boiler_temp: float | None,
+        power_w: float | None,
+        now: datetime,
+    ) -> None:
+        should_heat = mode != MODE_IDLE
+
+        # Anti-short-cycle: don't switch within MIN_CYCLE_MINUTES
+        if self._last_switch_time is not None:
+            if (now - self._last_switch_time).total_seconds() / 60 < MIN_CYCLE_MINUTES:
+                return
+
+        prev_mode = self._active_mode
+        self._active_mode = mode
+
+        if should_heat != self._heating:
+            self._heating = should_heat
+            self._last_switch_time = now
+
+            if should_heat:
+                await self._set_target_temp(desired_temp)
+                await self._turn_on_heatpump()
+                self._session_start = now
+                self._session_start_temp = boiler_temp
+                self._last_session = {"running_kwh": 0.0, "running_cost": 0.0, "running_savings": 0.0}
+                _LOGGER.info("DHW: start heating mode=%s target=%.1f°C", mode, desired_temp)
+                await self._notify(f"Boiler verwarming gestart ({mode}), doel: {desired_temp:.0f}°C")
+            else:
+                await self._turn_off_heatpump()
+                _LOGGER.info("DHW: stop heating previous_mode=%s", prev_mode)
+                if prev_mode == MODE_LEGIONELLA:
+                    self._last_legionella_run = now
+                    await self._notify("Legionella preventie run voltooid.")
+                if prev_mode == MODE_ANTI_BLOCK:
+                    self._last_pump_run = now
+
+        elif should_heat and mode != prev_mode:
+            # Mode changed while heating — update target temp
+            await self._set_target_temp(desired_temp)
+
+        # After boost: restore normal temp
+        if prev_mode == MODE_BOOST and mode == MODE_IDLE:
+            await self._set_target_temp(self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP))
+
+        if self._heating:
+            self._last_pump_run = now
+
+    async def _set_target_temp(self, temp: float) -> None:
+        entity_id = self.cfg.get(CONF_TARGET_TEMP_ENTITY)
+        if not entity_id:
+            return
+        domain = entity_id.split(".")[0]
+        await self.hass.services.async_call(
+            domain, "set_value", {"entity_id": entity_id, "value": temp}, blocking=True
+        )
+
+    async def _turn_on_heatpump(self) -> None:
+        sw = self.cfg.get(CONF_HEATPUMP_SWITCH)
+        if sw:
+            await self.hass.services.async_call(
+                "homeassistant", "turn_on", {"entity_id": sw}, blocking=True
+            )
+
+    async def _turn_off_heatpump(self) -> None:
+        for key in (CONF_HEATPUMP_SWITCH, CONF_EHEATER_SWITCH):
+            sw = self.cfg.get(key)
+            if sw:
+                await self.hass.services.async_call(
+                    "homeassistant", "turn_off", {"entity_id": sw}, blocking=True
+                )
+
+    # ------------------------------------------------------------------
+    # Session tracking + COP calculation
+    # ------------------------------------------------------------------
+
+    async def _track_session(
+        self,
+        boiler_temp: float | None,
+        power_w: float | None,
+        price_eur: float | None,
+        outside_temp: float | None,
+        now: datetime,
+    ) -> None:
+        if not self._heating or self._session_start is None:
+            return
+
+        kwh_delta = (power_w or 0) * UPDATE_INTERVAL / 3_600_000
+        cost_delta = kwh_delta * (price_eur or 0)
+        ref_price = self._opt(OPT_REFERENCE_PRICE_EUR, DEFAULT_REFERENCE_PRICE_EUR)
+        savings_delta = kwh_delta * max(0.0, ref_price - (price_eur or ref_price))
+
+        sess = self._last_session
+        sess["running_kwh"] = sess.get("running_kwh", 0.0) + kwh_delta
+        sess["running_cost"] = sess.get("running_cost", 0.0) + cost_delta
+        sess["running_savings"] = sess.get("running_savings", 0.0) + savings_delta
+        sess["kwh"] = sess["running_kwh"]
+        sess["cost"] = sess["running_cost"]
+        sess["savings"] = sess["running_savings"]
+
+        # COP = thermal energy delivered / electrical energy consumed
+        # Thermal energy: Q = volume [L] * 1 kg/L * Cp [kJ/(kg·°C)] * ΔT / 3600 → kWh
+        tank_vol = self._opt(OPT_TANK_VOLUME_L, DEFAULT_TANK_VOLUME_L)
+        start_temp = self._session_start_temp
+        if (
+            boiler_temp is not None
+            and start_temp is not None
+            and sess["running_kwh"] > 0
+            and boiler_temp > start_temp
+        ):
+            thermal_kwh = tank_vol * WATER_SPECIFIC_HEAT_KJ * (boiler_temp - start_temp) / 3600
+            sess["cop"] = round(thermal_kwh / sess["running_kwh"], 2)
+
+        # Session complete when boiler reaches target
+        target_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+        if boiler_temp is not None and boiler_temp >= target_temp - TEMP_HYSTERESIS:
+            duration_min = (now - self._session_start).total_seconds() / 60
+            self._heat_up_samples.append(duration_min)
+            if len(self._heat_up_samples) > HEAT_UP_SAMPLE_SIZE:
+                self._heat_up_samples.pop(0)
+
+            final_cop = sess.get("cop")
+            if final_cop:
+                self._cop_samples.append(final_cop)
+                if len(self._cop_samples) > HEAT_UP_SAMPLE_SIZE:
+                    self._cop_samples.pop(0)
+
+            self._monthly_savings += sess["running_savings"]
+
+            cop_str = f", COP {final_cop:.1f}" if final_cop else ""
+            outside_str = f" (buiten {outside_temp:.0f}°C)" if outside_temp is not None else ""
+            await self._notify(
+                f"Boiler klaar: {sess['running_kwh']:.2f} kWh, "
+                f"€{sess['running_cost']:.2f} kosten, "
+                f"besparing €{sess['running_savings']:.2f}"
+                f"{cop_str}{outside_str}"
+            )
+            _LOGGER.debug(
+                "DHW session: %.2f kWh, €%.3f, COP=%s, %.1f min heat-up",
+                sess["running_kwh"], sess["running_cost"], final_cop, duration_min,
+            )
+            sess["running_kwh"] = 0.0
+            sess["running_cost"] = 0.0
+            sess["running_savings"] = 0.0
+
+    # ------------------------------------------------------------------
+    # Shower readiness warning
+    # ------------------------------------------------------------------
+
+    async def _check_shower_readiness(self, now: datetime, boiler_temp: float | None) -> None:
+        """Warn via push if water won't reach temperature before a scheduled shower."""
+        if boiler_temp is None or not self._heat_up_samples:
+            return
+
+        heat_up_min = mean(self._heat_up_samples)
+        normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
+
+        for sched in schedules:
+            days = sched.get("days", list(range(7)))
+            if now.weekday() not in days:
+                continue
+
+            shower_time = dt_time.fromisoformat(sched.get("time", "07:30"))
+            required_temp = sched.get("temp", normal_temp)
+            shower_dt = now.replace(
+                hour=shower_time.hour, minute=shower_time.minute, second=0, microsecond=0
+            )
+            if shower_dt < now:
+                shower_dt += timedelta(days=1)
+
+            minutes_until = (shower_dt - now).total_seconds() / 60
+            key = shower_dt.isoformat()
+
+            # Warning window: 10–90 min before shower
+            if not (10 < minutes_until < 90):
+                self._shower_warning_sent.discard(key)
+                continue
+
+            if key in self._shower_warning_sent:
+                continue
+
+            if boiler_temp < required_temp - TEMP_HYSTERESIS and minutes_until < heat_up_min:
+                self._shower_warning_sent.add(key)
+                await self._notify(
+                    f"⚠️ Water waarschijnlijk niet op tijd warm voor "
+                    f"{shower_time.strftime('%H:%M')}! "
+                    f"Huidig: {boiler_temp:.0f}°C, nodig: {required_temp:.0f}°C, "
+                    f"verwachte opwarmtijd: {heat_up_min:.0f} min."
+                )
+
+    # ------------------------------------------------------------------
+    # Notifications
+    # ------------------------------------------------------------------
+
+    async def _notify(self, message: str) -> None:
+        service = self.cfg.get(CONF_NOTIFY_SERVICE)
+        if not service:
+            return
+        parts = service.split(".")
+        if len(parts) != 2:
+            return
+        try:
+            await self.hass.services.async_call(
+                parts[0], parts[1],
+                {"message": message, "title": "Warmtepomp Boiler"},
+                blocking=False,
+            )
+        except Exception as err:
+            _LOGGER.warning("DHW notify failed: %s", err)
+
+    # ------------------------------------------------------------------
+    # Status text
+    # ------------------------------------------------------------------
+
+    def _build_status_text(
+        self,
+        boiler_temp: float | None,
+        surplus_w: float | None,
+        price_eur: float | None,
+        outside_temp: float | None,
+    ) -> str:
+        mode = self._active_mode
+        outside = f" · buiten {outside_temp:.0f}°C" if outside_temp is not None else ""
+        if mode == MODE_IDLE:
+            return f"Standby{outside}"
+        if mode == MODE_SOLAR:
+            return f"Zonne-energie ({surplus_w:.0f} W overschot){outside}" if surplus_w else f"Zonne-energie{outside}"
+        if mode == MODE_BOOST:
+            return f"Boost ({surplus_w:.0f} W overschot){outside}" if surplus_w else f"Boost{outside}"
+        if mode == MODE_PRICE:
+            return f"Lage prijs (€{price_eur:.3f}/kWh){outside}" if price_eur else f"Lage prijs{outside}"
+        if mode == MODE_SCHEDULE:
+            return f"Douche schema{outside}"
+        if mode == MODE_LEGIONELLA:
+            return "Legionella preventie"
+        if mode == MODE_VACATION:
+            return f"Vakantie modus{outside}"
+        if mode == MODE_ANTI_BLOCK:
+            return "Anti-blokkeer run"
+        return mode.capitalize()
+
+    # ------------------------------------------------------------------
+    # Public properties
+    # ------------------------------------------------------------------
+
+    @property
+    def active_mode(self) -> str:
+        return self._active_mode
+
+    @property
+    def next_heating(self) -> datetime | None:
+        return self._next_heating
