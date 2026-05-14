@@ -454,10 +454,30 @@ class DHWCoordinator(DataUpdateCoordinator):
         entity_id = self.cfg.get(CONF_TARGET_TEMP_ENTITY)
         if not entity_id:
             return
+
+        # Clamp to entity min/max so we never send an out-of-range value
+        state = self.hass.states.get(entity_id)
+        if state:
+            try:
+                min_val = float(state.attributes.get("min", 0))
+                max_val = float(state.attributes.get("max", 100))
+                clamped = max(min_val, min(max_val, temp))
+                if clamped != temp:
+                    _LOGGER.warning(
+                        "DHW: target temp %.1f°C clamped to %.1f°C (entity range %.1f–%.1f)",
+                        temp, clamped, min_val, max_val,
+                    )
+                temp = clamped
+            except (TypeError, ValueError):
+                pass
+
         domain = entity_id.split(".")[0]
-        await self.hass.services.async_call(
-            domain, "set_value", {"entity_id": entity_id, "value": temp}, blocking=True
-        )
+        try:
+            await self.hass.services.async_call(
+                domain, "set_value", {"entity_id": entity_id, "value": temp}, blocking=True
+            )
+        except Exception as err:
+            _LOGGER.warning("DHW: kon doeltemperatuur niet instellen op %s: %s", entity_id, err)
 
     async def _turn_on_heatpump(self) -> None:
         sw = self.cfg.get(CONF_HEATPUMP_SWITCH)
