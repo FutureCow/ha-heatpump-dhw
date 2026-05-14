@@ -67,7 +67,10 @@
   "options": {
     "step": {
       "init": {
-        "title": "Instellingen aanpassen",
+        "title": "Instellingen"
+      },
+      "thresholds": {
+        "title": "Drempelwaarden & temperaturen",
         "data": {
           "solar_mode_enabled": "Zonne-energie modus",
           "solar_threshold_w": "Min. overschot voor zonne-modus (W)",
@@ -86,6 +89,24 @@
           "tank_volume_l": "Tankvolume (L)",
           "anti_block_days": "Anti-blokkeer interval (dagen)",
           "predictive_heating": "Voorspellend verwarmen"
+        }
+      },
+      "shower_schedules": {
+        "title": "Douche schema's",
+        "description": "Stel maximaal 3 douche-momenten in. De boiler start automatisch op tijd met opwarmen.",
+        "data": {
+          "s1_enabled": "Schema 1 actief",
+          "s1_time": "Schema 1 — tijd",
+          "s1_days": "Schema 1 — dagen",
+          "s1_temp": "Schema 1 — gewenste temperatuur (°C)",
+          "s2_enabled": "Schema 2 actief",
+          "s2_time": "Schema 2 — tijd",
+          "s2_days": "Schema 2 — dagen",
+          "s2_temp": "Schema 2 — gewenste temperatuur (°C)",
+          "s3_enabled": "Schema 3 actief",
+          "s3_time": "Schema 3 — tijd",
+          "s3_days": "Schema 3 — dagen",
+          "s3_temp": "Schema 3 — gewenste temperatuur (°C)"
         }
       }
     }

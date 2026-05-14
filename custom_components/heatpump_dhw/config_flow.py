@@ -167,6 +167,19 @@ class DHWConfigFlow(ConfigFlow, domain=DOMAIN):
         return DHWOptionsFlow(config_entry)
 
 
+_DAYS_OPTIONS = [
+    SelectOptionDict(value="0", label="Maandag"),
+    SelectOptionDict(value="1", label="Dinsdag"),
+    SelectOptionDict(value="2", label="Woensdag"),
+    SelectOptionDict(value="3", label="Donderdag"),
+    SelectOptionDict(value="4", label="Vrijdag"),
+    SelectOptionDict(value="5", label="Zaterdag"),
+    SelectOptionDict(value="6", label="Zondag"),
+]
+
+_WEEKDAYS = ["0", "1", "2", "3", "4"]
+
+
 class DHWOptionsFlow(OptionsFlow):
     """Handle options (thresholds + shower schedules) after initial setup."""
 
@@ -174,13 +187,67 @@ class DHWOptionsFlow(OptionsFlow):
         self._config_entry = config_entry
 
     async def async_step_init(self, user_input=None):
-        """Options menu — thresholds."""
-        if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+        """Show menu: thresholds or shower schedules."""
+        return self.async_show_menu(
+            step_id="init",
+            menu_options={
+                "thresholds": "Drempelwaarden & temperaturen",
+                "shower_schedules": "Douche schema's",
+            },
+        )
 
-        current = self._config_entry.options
-        schema = _defaults_schema(current)
-        return self.async_show_form(step_id="init", data_schema=schema)
+    async def async_step_thresholds(self, user_input=None):
+        """Thresholds and temperature settings."""
+        if user_input is not None:
+            new_options = {**self._config_entry.options, **user_input}
+            return self.async_create_entry(title="", data=new_options)
+
+        schema = _defaults_schema(self._config_entry.options)
+        return self.async_show_form(step_id="thresholds", data_schema=schema)
+
+    async def async_step_shower_schedules(self, user_input=None):
+        """Configure up to 3 shower schedules."""
+        if user_input is not None:
+            schedules = []
+            for i in range(1, 4):
+                if user_input.get(f"s{i}_enabled"):
+                    raw_time = user_input.get(f"s{i}_time", "07:00:00")
+                    # TimeSelector returns HH:MM:SS — strip seconds
+                    time_str = ":".join(str(raw_time).split(":")[:2])
+                    schedules.append(
+                        {
+                            "time": time_str,
+                            "days": [int(d) for d in user_input.get(f"s{i}_days", _WEEKDAYS)],
+                            "temp": float(user_input.get(f"s{i}_temp", DEFAULT_NORMAL_TEMP)),
+                        }
+                    )
+            new_options = {**self._config_entry.options, CONF_SHOWER_SCHEDULES: schedules}
+            return self.async_create_entry(title="", data=new_options)
+
+        # Pre-fill from stored schedules
+        stored = self._config_entry.options.get(CONF_SHOWER_SCHEDULES, [])
+        d: dict = {}
+        for i in range(1, 4):
+            sched = stored[i - 1] if i - 1 < len(stored) else None
+            d[f"s{i}_enabled"] = sched is not None
+            d[f"s{i}_time"] = (sched["time"] + ":00") if sched else "07:00:00"
+            d[f"s{i}_days"] = [str(x) for x in sched["days"]] if sched else list(_WEEKDAYS)
+            d[f"s{i}_temp"] = sched["temp"] if sched else DEFAULT_NORMAL_TEMP
+
+        def _slot(i: int) -> dict:
+            return {
+                vol.Optional(f"s{i}_enabled", default=d[f"s{i}_enabled"]): BooleanSelector(),
+                vol.Optional(f"s{i}_time", default=d[f"s{i}_time"]): TimeSelector(),
+                vol.Optional(f"s{i}_days", default=d[f"s{i}_days"]): SelectSelector(
+                    SelectSelectorConfig(options=_DAYS_OPTIONS, multiple=True)
+                ),
+                vol.Optional(f"s{i}_temp", default=d[f"s{i}_temp"]): NumberSelector(
+                    NumberSelectorConfig(min=35, max=75, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
+                ),
+            }
+
+        schema = vol.Schema({**_slot(1), **_slot(2), **_slot(3)})
+        return self.async_show_form(step_id="shower_schedules", data_schema=schema)
 
 
 def _defaults_schema(current: dict | None = None) -> vol.Schema:
