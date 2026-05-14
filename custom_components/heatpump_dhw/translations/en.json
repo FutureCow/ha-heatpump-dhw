@@ -1,0 +1,118 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Heat Pump DHW — Step 1: Hardware sensors",
+        "description": "Select the sensors of your heat pump boiler.",
+        "data": {
+          "boiler_temp_sensor": "Boiler water temperature sensor",
+          "power_sensor": "Power / consumption sensor (optional)"
+        }
+      },
+      "controls": {
+        "title": "Step 2: Hardware controls",
+        "description": "Select the switches and controls of your boiler.",
+        "data": {
+          "target_temp_entity": "Target temperature setting",
+          "heatpump_switch": "Heat pump on/off switch",
+          "eheater_switch": "Electric element switch (optional)",
+          "eheater_boost_temp_entity": "Boost temperature setting (optional)"
+        }
+      },
+      "grid": {
+        "title": "Step 3: Solar & dynamic prices",
+        "description": "Select the sensors for solar energy and electricity price.",
+        "data": {
+          "pv_production_sensor": "PV production sensor (W)",
+          "pv_surplus_sensor": "PV surplus sensor (W)",
+          "dynamic_price_sensor": "Current electricity price sensor (€/kWh)",
+          "price_forecast_sensor": "Price forecast sensor (optional)"
+        }
+      },
+      "optional": {
+        "title": "Step 4: Optional sensors",
+        "description": "Optional integrations for extra smart features.",
+        "data": {
+          "weather_entity": "Weather forecast entity (optional)",
+          "outside_temp_sensor": "Outside temperature sensor (optional, for COP calculation)",
+          "presence_sensor": "Presence sensor (optional)",
+          "notify_service": "Notification service (e.g. notify.mobile_app)"
+        }
+      },
+      "defaults": {
+        "title": "Step 5: Default settings",
+        "description": "Configure thresholds and temperatures. You can always change these later.",
+        "data": {
+          "solar_mode_enabled": "Enable solar surplus mode",
+          "solar_threshold_w": "Min. surplus for solar mode (W)",
+          "boost_mode_enabled": "Enable boost mode",
+          "boost_threshold_w": "Surplus for boost mode (W)",
+          "price_mode_enabled": "Enable dynamic price mode",
+          "price_threshold_eur": "Maximum price for heating (€/kWh)",
+          "normal_temp": "Normal target temperature (°C)",
+          "boost_temp": "Boost target temperature (°C)",
+          "vacation_min_temp": "Vacation minimum temperature (°C)",
+          "legionella_mode_enabled": "Enable legionella prevention",
+          "legionella_temp": "Legionella run temperature (°C)",
+          "legionella_day": "Day of legionella run",
+          "legionella_hour": "Hour of legionella run",
+          "reference_price_eur": "Reference price for savings (€/kWh)",
+          "tank_volume_l": "Tank volume (L, for COP calculation)",
+          "anti_block_days": "Anti-block: max. days without a run",
+          "predictive_heating": "Predictive heating (skip price mode if sunny tomorrow)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Settings",
+        "menu_options": {
+          "thresholds": "Thresholds & temperatures",
+          "shower_schedules": "Shower schedules"
+        }
+      },
+      "thresholds": {
+        "title": "Thresholds & temperatures",
+        "data": {
+          "solar_mode_enabled": "Solar surplus mode",
+          "solar_threshold_w": "Min. surplus for solar mode (W)",
+          "boost_mode_enabled": "Boost mode",
+          "boost_threshold_w": "Surplus for boost mode (W)",
+          "price_mode_enabled": "Dynamic price mode",
+          "price_threshold_eur": "Maximum price (€/kWh)",
+          "normal_temp": "Normal target temperature (°C)",
+          "boost_temp": "Boost temperature (°C)",
+          "vacation_min_temp": "Vacation minimum temperature (°C)",
+          "legionella_mode_enabled": "Legionella prevention",
+          "legionella_temp": "Legionella temperature (°C)",
+          "legionella_day": "Day of legionella run",
+          "legionella_hour": "Hour of legionella run",
+          "reference_price_eur": "Reference price (€/kWh)",
+          "tank_volume_l": "Tank volume (L)",
+          "anti_block_days": "Anti-block interval (days)",
+          "predictive_heating": "Predictive heating"
+        }
+      },
+      "shower_schedules": {
+        "title": "Shower schedules",
+        "description": "Configure up to 3 shower moments. The boiler pre-heats automatically.",
+        "data": {
+          "s1_enabled": "Schedule 1 active",
+          "s1_time": "Schedule 1 — time",
+          "s1_days": "Schedule 1 — days",
+          "s1_temp": "Schedule 1 — required temperature (°C)",
+          "s2_enabled": "Schedule 2 active",
+          "s2_time": "Schedule 2 — time",
+          "s2_days": "Schedule 2 — days",
+          "s2_temp": "Schedule 2 — required temperature (°C)",
+          "s3_enabled": "Schedule 3 active",
+          "s3_time": "Schedule 3 — time",
+          "s3_days": "Schedule 3 — days",
+          "s3_temp": "Schedule 3 — required temperature (°C)"
+        }
+      }
+    }
+  }
+}
