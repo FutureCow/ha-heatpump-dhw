@@ -67,7 +67,11 @@
   "options": {
     "step": {
       "init": {
-        "title": "Instellingen"
+        "title": "Instellingen",
+        "menu_options": {
+          "thresholds": "Drempelwaarden & temperaturen",
+          "shower_schedules": "Douche schema's"
+        }
       },
       "thresholds": {
         "title": "Drempelwaarden & temperaturen",
