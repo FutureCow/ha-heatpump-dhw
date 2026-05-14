@@ -31,6 +31,49 @@ Intelligente sturing van je warmtepomp boiler (warm tapwater) op basis van zonne
 2. Kopieer `www/heatpump-dhw-card/` naar je HA `www/` map
 3. Herstart Home Assistant
 
+## Verwachte sensor formaten
+
+Hieronder staat per sensor welke eenheid en welk formaat verwacht wordt. Verkeerde eenheden zorgen ervoor dat de sturing niet werkt.
+
+### Hardware sensoren
+
+| Sensor | Eenheid | Formaat | Voorbeeld |
+|--------|---------|---------|-----------|
+| Boiler watertemperatuur | `°C` | Decimaal getal | `54.3` |
+| Vermogen / verbruik | `W` | Geheel of decimaal getal | `850` |
+
+### Hardware bediening
+
+| Entiteit | Type | Waardebereik | Voorbeeld |
+|----------|------|-------------|-----------|
+| Gewenste temperatuur | `number` of `input_number` | `35` – `80` °C | `55` |
+| Warmtepomp schakelaar | `switch` of `input_boolean` | `on` / `off` | — |
+| E-heater schakelaar | `switch` of `input_boolean` | `on` / `off` | — |
+| E-heater boost temperatuur | `number` of `input_number` | °C | `65` |
+
+### Zon & dynamische prijzen
+
+| Sensor | Eenheid | Formaat | Voorbeeld | Veelgebruikte integratie |
+|--------|---------|---------|-----------|--------------------------|
+| PV opwekking | `W` | Geheel getal, **positief** | `2400` | Omvormer / SolarEdge / Growatt |
+| PV overschot | `W` | Geheel getal, **positief** = overschot naar net | `1100` | Omvormer / DSMR / P1 |
+| Huidige stroomprijs | `€/kWh` | Decimaal getal, **inclusief BTW en belasting** | `0.087` | Zonneplan, Tibber, ENTSO-E |
+| Prijsvoorspelling | `€/kWh` | Decimaal getal | `0.065` | Zonneplan, Tibber |
+
+> **Belangrijk voor de prijssensor:** De waarde moet in **€/kWh** zijn, inclusief alle belastingen en BTW. Bij Zonneplan is dit de sensor `sensor.zonneplan_current_electricity_price` (staat al in de juiste eenheid). Bij Tibber gebruik je `sensor.tibber_..._current_price`. Controleer altijd of de eenheid `€/kWh` toont in de HA entiteit — als het `ct/kWh` of een andere eenheid is, werkt de drempelwaarde niet correct.
+
+### Optionele sensoren
+
+| Sensor | Type | Verwachte waarde | Voorbeeld |
+|--------|------|-----------------|-----------|
+| Weersverwachting | `weather` entiteit | HA standaard weather | `weather.thuis` |
+| Buitentemperatuur | `°C` | Decimaal getal | `12.5` |
+| Aanwezigheid | `binary_sensor`, `person`, `device_tracker` of `input_boolean` | `on` / `home` = thuis | `binary_sensor.iemand_thuis` |
+
+> **Aanwezigheid:** De integratie beschouwt de volgende states als "thuis": `on`, `home`, `true`. Alles anders (bijv. `off`, `not_home`) activeert de vakantie modus als die ingeschakeld staat.
+
+---
+
 ## Configuratie
 
 De integratie wordt ingesteld via een UI wizard met 5 stappen:
