@@ -115,10 +115,15 @@ class DHWCoordinator(DataUpdateCoordinator):
         # Persisted data (loaded from storage)
         self._heat_up_samples: list[float] = []
         self._cop_samples: list[float] = []
+        self._loss_samples: list[float] = []  # °C/hour tank heat loss measurements
         self._last_legionella_run: datetime | None = None
         self._last_pump_run: datetime | None = None
         self._monthly_savings: float = 0.0
         self._savings_month: int = datetime.now().month
+
+        # For auto-learning heat loss rate
+        self._last_idle_temp: float | None = None
+        self._last_idle_time: datetime | None = None
 
         # Mode switches — toggled by switch entities
         self.solar_mode_enabled: bool = True
@@ -143,6 +148,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         stored = await self._store.async_load() or {}
         self._heat_up_samples = stored.get("heat_up_samples", [])
         self._cop_samples = stored.get("cop_samples", [])
+        self._loss_samples = stored.get("loss_samples", [])
         raw_ll = stored.get("last_legionella_run")
         self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
         raw_lp = stored.get("last_pump_run")
@@ -167,6 +173,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             {
                 "heat_up_samples": self._heat_up_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "cop_samples": self._cop_samples[-HEAT_UP_SAMPLE_SIZE:],
+                "loss_samples": self._loss_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "last_legionella_run": self._last_legionella_run.isoformat() if self._last_legionella_run else None,
                 "last_pump_run": self._last_pump_run.isoformat() if self._last_pump_run else None,
                 "absence_start": self._absence_start.isoformat() if self._absence_start else None,
@@ -249,6 +256,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         await self._apply_control(desired_mode, desired_temp, boiler_temp, power_w, now)
         await self._track_session(boiler_temp, power_w, price_eur, outside_temp, now)
+        self._learn_heat_loss(boiler_temp, now)
         await self._check_shower_readiness(now, boiler_temp)
 
         self._next_heating = self._calc_next_heating(now)
@@ -275,8 +283,30 @@ class DHWCoordinator(DataUpdateCoordinator):
             "next_heating": self._next_heating.isoformat() if self._next_heating else None,
             "heat_up_duration_min": round(mean(self._heat_up_samples)) if self._heat_up_samples else None,
             "monthly_savings": self._monthly_savings,
+            "learned_loss_rate": round(mean(self._loss_samples), 2) if self._loss_samples else None,
             "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp),
         }
+
+    def _learn_heat_loss(self, boiler_temp: float | None, now: datetime) -> None:
+        """Measure tank heat loss rate during idle periods and update rolling average."""
+        if self._heating or boiler_temp is None:
+            self._last_idle_temp = None
+            self._last_idle_time = None
+            return
+
+        if self._last_idle_temp is not None and self._last_idle_time is not None:
+            elapsed_hours = (now - self._last_idle_time).total_seconds() / 3600
+            if 0.1 <= elapsed_hours <= 2.0:
+                drop = self._last_idle_temp - boiler_temp
+                if drop > 0:
+                    rate = drop / elapsed_hours
+                    if 0.05 <= rate <= 3.0:  # sanity bounds
+                        self._loss_samples.append(rate)
+                        if len(self._loss_samples) > HEAT_UP_SAMPLE_SIZE:
+                            self._loss_samples.pop(0)
+
+        self._last_idle_temp = boiler_temp
+        self._last_idle_time = now
 
     # ------------------------------------------------------------------
     # Price forecast helpers
@@ -357,10 +387,15 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         return sorted(result, key=lambda x: x[0])
 
+    def _effective_window_hours(self) -> int:
+        """Return the configured price window; 0 means use all available data (168h)."""
+        w = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
+        return 168 if w == 0 else w
+
     def _is_cheap_hour(self, now: datetime) -> bool:
-        """Return True if current hour is among the cheapest N hours in the next 24h."""
+        """Return True if current hour is among the cheapest N hours in the price window."""
         cheap_hours = int(self._opt(OPT_CHEAP_HOURS, DEFAULT_CHEAP_HOURS))
-        prices = self._get_forecast_prices(now)
+        prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
         if not prices:
             return False
         cheapest = sorted(prices, key=lambda x: x[1])[:cheap_hours]
@@ -484,8 +519,8 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         Returns (slot_start, target_temp) or (None, required_temp) if no forecast.
         """
-        window_hours = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
-        loss_rate = float(self._opt(OPT_TANK_LOSS_RATE, DEFAULT_TANK_LOSS_RATE))
+        window_hours = self._effective_window_hours()
+        loss_rate = mean(self._loss_samples) if self._loss_samples else float(self._opt(OPT_TANK_LOSS_RATE, DEFAULT_TANK_LOSS_RATE))
         boost_temp = self._opt(OPT_BOOST_TEMP, DEFAULT_BOOST_TEMP)
 
         prices = self._get_forecast_prices(now, hours=window_hours)
@@ -516,7 +551,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
         heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
-        window_hours = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
+        window_hours = self._effective_window_hours()
 
         for sched in schedules:
             days = sched.get("days", list(range(7)))
@@ -557,7 +592,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
         heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
-        window_hours = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
+        window_hours = self._effective_window_hours()
         candidates: list[datetime] = []
 
         for sched in schedules:

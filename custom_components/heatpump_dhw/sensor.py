@@ -143,6 +143,14 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:chart-line",
     ),
+    DHWSensorDescription(
+        key="learned_loss_rate",
+        data_key="learned_loss_rate",
+        name="Gemeten warmteverlies tank",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:thermometer-minus",
+    ),
 )
 
 
