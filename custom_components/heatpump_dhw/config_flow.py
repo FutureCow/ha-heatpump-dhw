@@ -38,6 +38,7 @@ from .const import (
     CONF_WEATHER_ENTITY,
     DEFAULT_ANTI_BLOCK_DAYS,
     DEFAULT_BOOST_TEMP,
+    DEFAULT_CHEAP_HOURS,
     DEFAULT_BOOST_THRESHOLD_W,
     DEFAULT_LEGIONELLA_DAY,
     DEFAULT_LEGIONELLA_HOUR,
@@ -60,6 +61,7 @@ from .const import (
     OPT_LEGIONELLA_MODE_ENABLED,
     OPT_LEGIONELLA_TEMP,
     OPT_NORMAL_TEMP,
+    OPT_CHEAP_HOURS,
     OPT_PREDICTIVE_HEATING,
     OPT_PRICE_MODE_ENABLED,
     OPT_PRICE_THRESHOLD_EUR,
@@ -272,6 +274,9 @@ def _defaults_schema(current: dict | None = None) -> vol.Schema:
             vol.Optional(OPT_PRICE_MODE_ENABLED, default=_n(OPT_PRICE_MODE_ENABLED, True)): BooleanSelector(),
             vol.Optional(OPT_PRICE_THRESHOLD_EUR, default=_n(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)): NumberSelector(
                 NumberSelectorConfig(min=0, max=1, step=0.01, unit_of_measurement="€/kWh", mode=NumberSelectorMode.BOX)
+            ),
+            vol.Optional(OPT_CHEAP_HOURS, default=_n(OPT_CHEAP_HOURS, DEFAULT_CHEAP_HOURS)): NumberSelector(
+                NumberSelectorConfig(min=1, max=12, step=1, unit_of_measurement="uur", mode=NumberSelectorMode.BOX)
             ),
             vol.Optional(OPT_NORMAL_TEMP, default=_n(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)): NumberSelector(
                 NumberSelectorConfig(min=35, max=80, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
