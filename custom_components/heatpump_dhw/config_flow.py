@@ -48,6 +48,7 @@ from .const import (
     DEFAULT_REFERENCE_PRICE_EUR,
     DEFAULT_SOLAR_THRESHOLD_W,
     DEFAULT_TANK_VOLUME_L,
+    DEFAULT_VACATION_ABSENCE_HOURS,
     DEFAULT_VACATION_MIN_TEMP,
     DOMAIN,
     OPT_ANTI_BLOCK_DAYS,
@@ -66,6 +67,7 @@ from .const import (
     OPT_SOLAR_MODE_ENABLED,
     OPT_SOLAR_THRESHOLD_W,
     OPT_TANK_VOLUME_L,
+    OPT_VACATION_ABSENCE_HOURS,
     OPT_VACATION_MIN_TEMP,
 )
 
@@ -279,6 +281,9 @@ def _defaults_schema(current: dict | None = None) -> vol.Schema:
             ),
             vol.Optional(OPT_VACATION_MIN_TEMP, default=_n(OPT_VACATION_MIN_TEMP, DEFAULT_VACATION_MIN_TEMP)): NumberSelector(
                 NumberSelectorConfig(min=20, max=60, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
+            ),
+            vol.Optional(OPT_VACATION_ABSENCE_HOURS, default=_n(OPT_VACATION_ABSENCE_HOURS, DEFAULT_VACATION_ABSENCE_HOURS)): NumberSelector(
+                NumberSelectorConfig(min=1, max=72, step=1, unit_of_measurement="uur", mode=NumberSelectorMode.BOX)
             ),
             vol.Optional(OPT_LEGIONELLA_MODE_ENABLED, default=_n(OPT_LEGIONELLA_MODE_ENABLED, True)): BooleanSelector(),
             vol.Optional(OPT_LEGIONELLA_TEMP, default=_n(OPT_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)): NumberSelector(
