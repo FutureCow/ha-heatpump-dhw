@@ -281,9 +281,10 @@ class DHWCoordinator(DataUpdateCoordinator):
     def _get_forecast_prices(self, now: datetime) -> list[tuple[datetime, float]]:
         """Return (hour_dt, price) pairs for the next 24h from the forecast sensor.
 
-        Supports two attribute formats:
-        - Zonneplan: prices_today/prices_tomorrow with {time, price} objects
-        - Nordpool:  raw_today/raw_tomorrow with {start, value} objects
+        Supports three attribute formats:
+        - Zonneplan app:      forecast [{datetime, electricity_price (millionths €)}]
+        - Zonneplan template: prices_today/prices_tomorrow [{time, price}]
+        - Nordpool:           raw_today/raw_tomorrow [{start, value}]
         """
         entity_id = self.cfg.get(CONF_PRICE_FORECAST_SENSOR)
         if not entity_id:
@@ -295,16 +296,33 @@ class DHWCoordinator(DataUpdateCoordinator):
         attrs = state.attributes
         raw_entries: list[dict] = []
 
-        # Zonneplan format
-        for key in ("prices_today", "prices_tomorrow"):
-            val = attrs.get(key, [])
-            if isinstance(val, str):
-                try:
-                    val = json.loads(val)
-                except (json.JSONDecodeError, ValueError):
-                    continue
-            if isinstance(val, list):
-                raw_entries.extend(val)
+        # Zonneplan app format: attribute "forecast" with {datetime, electricity_price} entries.
+        # electricity_price is in millionths of a euro (e.g. 3201888 = €0.320/kWh).
+        zonneplan_forecast = attrs.get("forecast", [])
+        if isinstance(zonneplan_forecast, str):
+            try:
+                zonneplan_forecast = json.loads(zonneplan_forecast)
+            except (json.JSONDecodeError, ValueError):
+                zonneplan_forecast = []
+        if isinstance(zonneplan_forecast, list) and zonneplan_forecast:
+            for entry in zonneplan_forecast:
+                if "datetime" in entry and "electricity_price" in entry:
+                    raw_entries.append({
+                        "time": entry["datetime"],
+                        "price": float(entry["electricity_price"]) / 1_000_000,
+                    })
+
+        # Zonneplan template format: prices_today / prices_tomorrow with {time, price}
+        if not raw_entries:
+            for key in ("prices_today", "prices_tomorrow"):
+                val = attrs.get(key, [])
+                if isinstance(val, str):
+                    try:
+                        val = json.loads(val)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                if isinstance(val, list):
+                    raw_entries.extend(val)
 
         # Nordpool format — normalise to {time, price}
         if not raw_entries:
@@ -324,8 +342,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         result: list[tuple[datetime, float]] = []
         for entry in raw_entries:
             try:
-                t = datetime.fromisoformat(str(entry.get("time", "")))
-                # Make timezone-aware if naive, matching now's tzinfo
+                t = datetime.fromisoformat(str(entry.get("time", "")).replace("Z", "+00:00"))
                 if t.tzinfo is None and now.tzinfo is not None:
                     t = t.replace(tzinfo=now.tzinfo)
                 p = float(entry.get("price", 0))
