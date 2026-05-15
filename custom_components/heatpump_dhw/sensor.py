@@ -110,6 +110,15 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         icon="mdi:flash",
     ),
     DHWSensorDescription(
+        key="surplus_w",
+        data_key="surplus_w",
+        name="Zonne-overschot",
+        native_unit_of_measurement=UnitOfPower.WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:solar-power",
+    ),
+    DHWSensorDescription(
         key="outside_temp",
         data_key="outside_temp",
         name="Buitentemperatuur",
