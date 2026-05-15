@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_REFERENCE_PRICE_EUR,
     DEFAULT_SOLAR_THRESHOLD_W,
     DEFAULT_TANK_VOLUME_L,
+    DEFAULT_VACATION_ABSENCE_HOURS,
     DEFAULT_VACATION_MIN_TEMP,
     DOMAIN,
     HEAT_UP_SAMPLE_SIZE,
@@ -66,6 +67,7 @@ from .const import (
     OPT_SOLAR_MODE_ENABLED,
     OPT_SOLAR_THRESHOLD_W,
     OPT_TANK_VOLUME_L,
+    OPT_VACATION_ABSENCE_HOURS,
     OPT_VACATION_MIN_TEMP,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -117,6 +119,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         self.legionella_mode_enabled: bool = True
         self.vacation_mode_enabled: bool = False
 
+        # Absence tracking for delayed vacation mode
+        self._absence_start: datetime | None = None
+
         # Track sent shower warnings to avoid spam
         self._shower_warning_sent: set[str] = set()
 
@@ -134,6 +139,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
         raw_lp = stored.get("last_pump_run")
         self._last_pump_run = datetime.fromisoformat(raw_lp) if raw_lp else None
+        raw_abs = stored.get("absence_start")
+        self._absence_start = datetime.fromisoformat(raw_abs) if raw_abs else None
         self._monthly_savings = stored.get("monthly_savings", 0.0)
         self._savings_month = stored.get("savings_month", datetime.now().month)
         self._last_session = stored.get("last_session", {})
@@ -154,6 +161,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "cop_samples": self._cop_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "last_legionella_run": self._last_legionella_run.isoformat() if self._last_legionella_run else None,
                 "last_pump_run": self._last_pump_run.isoformat() if self._last_pump_run else None,
+                "absence_start": self._absence_start.isoformat() if self._absence_start else None,
                 "monthly_savings": self._monthly_savings,
                 "savings_month": self._savings_month,
                 "last_session": self._last_session,
@@ -336,8 +344,18 @@ class DHWCoordinator(DataUpdateCoordinator):
         if schedule_mode:
             return MODE_SCHEDULE, schedule_temp or normal_temp
 
-        # 7. Vacation — hold minimum temperature
-        if self.vacation_mode_enabled or present is False:
+        # 7. Vacation — hold minimum temperature after prolonged absence
+        absence_hours = self._opt(OPT_VACATION_ABSENCE_HOURS, DEFAULT_VACATION_ABSENCE_HOURS)
+        if present is True:
+            self._absence_start = None  # reset on arrival
+        elif present is False and not self.vacation_mode_enabled:
+            if self._absence_start is None:
+                self._absence_start = now
+        absent_long_enough = (
+            self._absence_start is not None
+            and (now - self._absence_start).total_seconds() / 3600 >= absence_hours
+        )
+        if self.vacation_mode_enabled or absent_long_enough:
             min_temp = self._opt(OPT_VACATION_MIN_TEMP, DEFAULT_VACATION_MIN_TEMP)
             if boiler_temp is None or boiler_temp < min_temp - TEMP_HYSTERESIS:
                 return MODE_VACATION, min_temp
