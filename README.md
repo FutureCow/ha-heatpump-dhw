@@ -62,6 +62,22 @@ Hieronder staat per sensor welke eenheid en welk formaat verwacht wordt. Verkeer
 
 > **Belangrijk voor de prijssensor:** De waarde moet in **€/kWh** zijn, inclusief alle belastingen en BTW. Bij Zonneplan is dit de sensor `sensor.zonneplan_current_electricity_price` (staat al in de juiste eenheid). Bij Tibber gebruik je `sensor.tibber_..._current_price`. Controleer altijd of de eenheid `€/kWh` toont in de HA entiteit — als het `ct/kWh` of een andere eenheid is, werkt de drempelwaarde niet correct.
 
+#### Prijsvoorspelling sensor — ondersteunde formaten
+
+De prijsvoorspelling sensor (`price_forecast_sensor`) wordt gebruikt voor de "goedkoopste X uur" modus. De integratie herkent automatisch welk formaat de sensor gebruikt:
+
+**Zonneplan formaat** — attributen `prices_today` en `prices_tomorrow`, elk een lijst van objecten met `time` en `price`:
+```json
+[{"time": "2024-01-15T14:00:00+01:00", "price": 0.087}, ...]
+```
+
+**Nordpool formaat** — attributen `raw_today` en `raw_tomorrow`, elk een lijst van objecten met `start` en `value`:
+```json
+[{"start": "2024-01-15T14:00:00+01:00", "value": 0.087}, ...]
+```
+
+De integratie probeert eerst het Zonneplan formaat. Als er geen `prices_today`/`prices_tomorrow` attributen zijn, wordt automatisch het Nordpool formaat geprobeerd. Als er geen voorspelling beschikbaar is, valt de prijsmodus terug op de gewone drempelwaarde.
+
 ### Optionele sensoren
 
 | Sensor | Type | Verwachte waarde | Voorbeeld |

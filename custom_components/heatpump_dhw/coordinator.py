@@ -1,6 +1,7 @@
 """Central coordinator — reads sensors, decides mode, controls hardware."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, time as dt_time
 from statistics import mean
@@ -16,6 +17,7 @@ from .const import (
     ANTI_BLOCK_RUN_MINUTES,
     CONF_BOILER_TEMP_SENSOR,
     CONF_DYNAMIC_PRICE_SENSOR,
+    CONF_PRICE_FORECAST_SENSOR,
     CONF_EHEATER_SWITCH,
     CONF_HEATPUMP_SWITCH,
     CONF_NOTIFY_SERVICE,
@@ -28,6 +30,7 @@ from .const import (
     CONF_WEATHER_ENTITY,
     DEFAULT_ANTI_BLOCK_DAYS,
     DEFAULT_BOOST_TEMP,
+    DEFAULT_CHEAP_HOURS,
     DEFAULT_BOOST_THRESHOLD_W,
     DEFAULT_LEGIONELLA_DAY,
     DEFAULT_LEGIONELLA_HOUR,
@@ -40,6 +43,7 @@ from .const import (
     DEFAULT_TANK_VOLUME_L,
     DEFAULT_VACATION_ABSENCE_HOURS,
     DEFAULT_VACATION_MIN_TEMP,
+    OPT_CHEAP_HOURS,
     DOMAIN,
     HEAT_UP_SAMPLE_SIZE,
     MIN_CYCLE_MINUTES,
@@ -271,6 +275,81 @@ class DHWCoordinator(DataUpdateCoordinator):
         }
 
     # ------------------------------------------------------------------
+    # Price forecast helpers
+    # ------------------------------------------------------------------
+
+    def _get_forecast_prices(self, now: datetime) -> list[tuple[datetime, float]]:
+        """Return (hour_dt, price) pairs for the next 24h from the forecast sensor.
+
+        Supports two attribute formats:
+        - Zonneplan: prices_today/prices_tomorrow with {time, price} objects
+        - Nordpool:  raw_today/raw_tomorrow with {start, value} objects
+        """
+        entity_id = self.cfg.get(CONF_PRICE_FORECAST_SENSOR)
+        if not entity_id:
+            return []
+        state = self.hass.states.get(entity_id)
+        if not state:
+            return []
+
+        attrs = state.attributes
+        raw_entries: list[dict] = []
+
+        # Zonneplan format
+        for key in ("prices_today", "prices_tomorrow"):
+            val = attrs.get(key, [])
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+            if isinstance(val, list):
+                raw_entries.extend(val)
+
+        # Nordpool format — normalise to {time, price}
+        if not raw_entries:
+            for key in ("raw_today", "raw_tomorrow"):
+                val = attrs.get(key, [])
+                if isinstance(val, str):
+                    try:
+                        val = json.loads(val)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                if isinstance(val, list):
+                    for entry in val:
+                        if "start" in entry and "value" in entry:
+                            raw_entries.append({"time": entry["start"], "price": entry["value"]})
+
+        cutoff = now + timedelta(hours=24)
+        result: list[tuple[datetime, float]] = []
+        for entry in raw_entries:
+            try:
+                t = datetime.fromisoformat(str(entry.get("time", "")))
+                # Make timezone-aware if naive, matching now's tzinfo
+                if t.tzinfo is None and now.tzinfo is not None:
+                    t = t.replace(tzinfo=now.tzinfo)
+                p = float(entry.get("price", 0))
+                if now <= t < cutoff:
+                    result.append((t, p))
+            except (ValueError, TypeError):
+                continue
+
+        return sorted(result, key=lambda x: x[0])
+
+    def _is_cheap_hour(self, now: datetime) -> bool:
+        """Return True if current hour is among the cheapest N hours in the next 24h."""
+        cheap_hours = int(self._opt(OPT_CHEAP_HOURS, DEFAULT_CHEAP_HOURS))
+        prices = self._get_forecast_prices(now)
+        if not prices:
+            return False
+        cheapest = sorted(prices, key=lambda x: x[1])[:cheap_hours]
+        current_hour = now.replace(minute=0, second=0, microsecond=0)
+        cheapest_starts = {
+            dt.replace(minute=0, second=0, microsecond=0) for dt, _ in cheapest
+        }
+        return current_hour in cheapest_starts
+
+    # ------------------------------------------------------------------
     # Mode decision — priority order
     # ------------------------------------------------------------------
 
@@ -327,17 +406,19 @@ class DHWCoordinator(DataUpdateCoordinator):
         ):
             return MODE_SOLAR, normal_temp
 
-        # 5. Dynamic price — skip if tomorrow looks sunny (predictive: wait for free solar)
-        price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
+        # 5. Dynamic price — use cheapest-hours forecast when available, else threshold
         predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
+        skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
         if (
             self.price_mode_enabled
-            and price_eur is not None
-            and price_eur <= price_threshold
-            and not (predictive and self._weather_forecast_tomorrow_sunny())
+            and not skip_predictive
             and (boiler_temp is None or boiler_temp < normal_temp - TEMP_HYSTERESIS)
         ):
-            return MODE_PRICE, normal_temp
+            price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
+            use_forecast = self._is_cheap_hour(now)
+            use_threshold = not use_forecast and price_eur is not None and price_eur <= price_threshold
+            if use_forecast or use_threshold:
+                return MODE_PRICE, normal_temp
 
         # 6. Shower schedule — pre-heat before planned shower
         schedule_mode, schedule_temp = self._check_schedule(now, boiler_temp)

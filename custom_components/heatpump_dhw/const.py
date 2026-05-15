@@ -47,6 +47,7 @@ OPT_TANK_VOLUME_L = "tank_volume_l"
 OPT_ANTI_BLOCK_DAYS = "anti_block_days"
 OPT_PREDICTIVE_HEATING = "predictive_heating"  # skip price-mode if tomorrow is sunny
 OPT_VACATION_ABSENCE_HOURS = "vacation_absence_hours"
+OPT_CHEAP_HOURS = "cheap_hours"
 
 # Default option values
 DEFAULT_SOLAR_THRESHOLD_W = 500
@@ -63,6 +64,7 @@ DEFAULT_TANK_VOLUME_L = 200.0
 DEFAULT_ANTI_BLOCK_DAYS = 3
 DEFAULT_PREDICTIVE_HEATING = True
 DEFAULT_VACATION_ABSENCE_HOURS = 24
+DEFAULT_CHEAP_HOURS = 2
 
 # Heating modes
 MODE_IDLE = "idle"
