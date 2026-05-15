@@ -31,6 +31,8 @@ from .const import (
     DEFAULT_ANTI_BLOCK_DAYS,
     DEFAULT_BOOST_TEMP,
     DEFAULT_CHEAP_HOURS,
+    DEFAULT_PRICE_WINDOW_HOURS,
+    DEFAULT_TANK_LOSS_RATE,
     DEFAULT_BOOST_THRESHOLD_W,
     DEFAULT_LEGIONELLA_DAY,
     DEFAULT_LEGIONELLA_HOUR,
@@ -44,6 +46,8 @@ from .const import (
     DEFAULT_VACATION_ABSENCE_HOURS,
     DEFAULT_VACATION_MIN_TEMP,
     OPT_CHEAP_HOURS,
+    OPT_PRICE_WINDOW_HOURS,
+    OPT_TANK_LOSS_RATE,
     DOMAIN,
     HEAT_UP_SAMPLE_SIZE,
     MIN_CYCLE_MINUTES,
@@ -278,7 +282,7 @@ class DHWCoordinator(DataUpdateCoordinator):
     # Price forecast helpers
     # ------------------------------------------------------------------
 
-    def _get_forecast_prices(self, now: datetime) -> list[tuple[datetime, float]]:
+    def _get_forecast_prices(self, now: datetime, hours: int = 24) -> list[tuple[datetime, float]]:
         """Return (hour_dt, price) pairs for the next 24h from the forecast sensor.
 
         Supports three attribute formats:
@@ -338,7 +342,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                         if "start" in entry and "value" in entry:
                             raw_entries.append({"time": entry["start"], "price": entry["value"]})
 
-        cutoff = now + timedelta(hours=24)
+        cutoff = now + timedelta(hours=hours)
         result: list[tuple[datetime, float]] = []
         for entry in raw_entries:
             try:
@@ -469,47 +473,117 @@ class DHWCoordinator(DataUpdateCoordinator):
             return False
         return True
 
+    def _find_optimal_shower_slot(
+        self,
+        now: datetime,
+        shower_dt: datetime,
+        required_temp: float,
+        heat_up_min: float,
+    ) -> tuple[datetime | None, float]:
+        """Find cheapest hour to pre-heat for a shower, with heat-loss buffer.
+
+        Returns (slot_start, target_temp) or (None, required_temp) if no forecast.
+        """
+        window_hours = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
+        loss_rate = float(self._opt(OPT_TANK_LOSS_RATE, DEFAULT_TANK_LOSS_RATE))
+        boost_temp = self._opt(OPT_BOOST_TEMP, DEFAULT_BOOST_TEMP)
+
+        prices = self._get_forecast_prices(now, hours=window_hours)
+        if not prices:
+            return None, required_temp
+
+        # Only slots where heating finishes before the shower
+        valid = [
+            (t, p) for t, p in prices
+            if t >= now and t + timedelta(minutes=heat_up_min) <= shower_dt
+        ]
+        if not valid:
+            return None, required_temp
+
+        best_t, _ = min(valid, key=lambda x: x[1])
+
+        # Buffer for heat loss between end of heating and shower time
+        heat_end = best_t + timedelta(minutes=heat_up_min)
+        hours_gap = max(0.0, (shower_dt - heat_end).total_seconds() / 3600)
+        buffer = min(hours_gap * loss_rate, 8.0)  # cap at 8 °C
+        target = round(min(required_temp + buffer, boost_temp), 1)
+
+        return best_t, target
+
     def _check_schedule(
         self, now: datetime, boiler_temp: float | None
     ) -> tuple[bool, float | None]:
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
         heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+        window_hours = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
 
         for sched in schedules:
             days = sched.get("days", list(range(7)))
-            if now.weekday() not in days:
-                continue
             shower_time = dt_time.fromisoformat(sched.get("time", "07:30"))
             required_temp = sched.get("temp", normal_temp)
-            shower_dt = now.replace(
-                hour=shower_time.hour, minute=shower_time.minute, second=0, microsecond=0
-            )
-            if shower_dt < now:
-                shower_dt += timedelta(days=1)
-            start_at = shower_dt - timedelta(minutes=heat_up_min + 10)
-            if start_at <= now <= shower_dt:
-                if boiler_temp is None or boiler_temp < required_temp - TEMP_HYSTERESIS:
-                    return True, required_temp
+
+            # Collect all shower occurrences within the look-ahead window
+            for day_offset in range(int(window_hours / 24) + 2):
+                candidate = now + timedelta(days=day_offset)
+                if candidate.weekday() not in days:
+                    continue
+                shower_dt = datetime.combine(candidate.date(), shower_time, tzinfo=now.tzinfo)
+                if shower_dt <= now:
+                    continue
+                if (shower_dt - now).total_seconds() / 3600 > window_hours:
+                    continue
+
+                # Try price-optimal slot first
+                optimal_t, target_temp = self._find_optimal_shower_slot(
+                    now, shower_dt, required_temp, heat_up_min
+                )
+                if optimal_t is not None:
+                    current_hour = now.replace(minute=0, second=0, microsecond=0)
+                    slot_hour = optimal_t.replace(minute=0, second=0, microsecond=0)
+                    if current_hour == slot_hour:
+                        if boiler_temp is None or boiler_temp < target_temp - TEMP_HYSTERESIS:
+                            return True, target_temp
+                else:
+                    # No forecast — fall back to fixed window
+                    start_at = shower_dt - timedelta(minutes=heat_up_min + 10)
+                    if start_at <= now <= shower_dt:
+                        if boiler_temp is None or boiler_temp < required_temp - TEMP_HYSTERESIS:
+                            return True, required_temp
 
         return False, None
 
     def _calc_next_heating(self, now: datetime) -> datetime | None:
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
         heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
+        normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+        window_hours = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
         candidates: list[datetime] = []
+
         for sched in schedules:
             days = sched.get("days", list(range(7)))
             shower_time = dt_time.fromisoformat(sched.get("time", "07:30"))
-            for offset in range(7):
-                candidate = now + timedelta(days=offset)
+            required_temp = sched.get("temp", normal_temp)
+
+            for day_offset in range(int(window_hours / 24) + 2):
+                candidate = now + timedelta(days=day_offset)
                 if candidate.weekday() not in days:
                     continue
                 shower_dt = datetime.combine(candidate.date(), shower_time, tzinfo=now.tzinfo)
-                start_dt = shower_dt - timedelta(minutes=heat_up_min + 10)
-                if start_dt > now:
-                    candidates.append(start_dt)
-                    break
+                if shower_dt <= now:
+                    continue
+
+                optimal_t, _ = self._find_optimal_shower_slot(
+                    now, shower_dt, required_temp, heat_up_min
+                )
+                if optimal_t is not None and optimal_t > now:
+                    candidates.append(optimal_t)
+                else:
+                    start_dt = shower_dt - timedelta(minutes=heat_up_min + 10)
+                    if start_dt > now:
+                        candidates.append(start_dt)
+                break  # only first occurrence per schedule
+
         return min(candidates) if candidates else None
 
     # ------------------------------------------------------------------
