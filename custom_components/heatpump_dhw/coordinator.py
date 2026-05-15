@@ -523,21 +523,33 @@ class DHWCoordinator(DataUpdateCoordinator):
         loss_rate = mean(self._loss_samples) if self._loss_samples else float(self._opt(OPT_TANK_LOSS_RATE, DEFAULT_TANK_LOSS_RATE))
         boost_temp = self._opt(OPT_BOOST_TEMP, DEFAULT_BOOST_TEMP)
 
-        prices = self._get_forecast_prices(now, hours=window_hours)
-        if not prices:
+        all_prices = self._get_forecast_prices(now, hours=window_hours)
+        if not all_prices:
             return None, required_temp
 
-        # Only slots where heating finishes before the shower
-        valid = [
-            (t, p) for t, p in prices
+        # Slots feasible for shower pre-heat (heating finishes before shower)
+        feasible = [
+            (t, p) for t, p in all_prices
             if t >= now and t + timedelta(minutes=heat_up_min) <= shower_dt
         ]
-        if not valid:
+        if not feasible:
             return None, required_temp
 
-        best_t, _ = min(valid, key=lambda x: x[1])
+        # Find which hours are "cheap" in the full window (same N as price mode)
+        cheap_n = int(self._opt(OPT_CHEAP_HOURS, DEFAULT_CHEAP_HOURS))
+        cheapest_times = {
+            t for t, _ in sorted(all_prices, key=lambda x: x[1])[:cheap_n]
+        }
 
-        # Buffer for heat loss between end of heating and shower time
+        # Prefer the LAST cheap slot before the shower — buffer only needed for that gap.
+        # If no cheap slot is feasible, fall back to the single cheapest feasible slot.
+        cheap_feasible = [(t, p) for t, p in feasible if t in cheapest_times]
+        if cheap_feasible:
+            best_t = max(t for t, _ in cheap_feasible)  # latest cheap slot
+        else:
+            best_t, _ = min(feasible, key=lambda x: x[1])  # cheapest feasible
+
+        # Buffer only for the gap between end of LAST heating and shower
         heat_end = best_t + timedelta(minutes=heat_up_min)
         hours_gap = max(0.0, (shower_dt - heat_end).total_seconds() / 3600)
         buffer = min(hours_gap * loss_rate, 8.0)  # cap at 8 °C
