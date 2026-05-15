@@ -283,7 +283,7 @@ def _defaults_schema(current: dict | None = None) -> vol.Schema:
                 NumberSelectorConfig(min=1, max=12, step=1, unit_of_measurement="uur", mode=NumberSelectorMode.BOX)
             ),
             vol.Optional(OPT_PRICE_WINDOW_HOURS, default=_n(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS)): NumberSelector(
-                NumberSelectorConfig(min=6, max=48, step=1, unit_of_measurement="uur", mode=NumberSelectorMode.BOX)
+                NumberSelectorConfig(min=0, max=48, step=1, unit_of_measurement="uur", mode=NumberSelectorMode.BOX)
             ),
             vol.Optional(OPT_TANK_LOSS_RATE, default=_n(OPT_TANK_LOSS_RATE, DEFAULT_TANK_LOSS_RATE)): NumberSelector(
                 NumberSelectorConfig(min=0.1, max=2.0, step=0.1, unit_of_measurement="°C/uur", mode=NumberSelectorMode.BOX)
