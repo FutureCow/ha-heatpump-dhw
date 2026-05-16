@@ -328,13 +328,26 @@ class DHWCoordinator(DataUpdateCoordinator):
     # Price forecast helpers
     # ------------------------------------------------------------------
 
-    def _get_forecast_prices(self, now: datetime, hours: int = 24) -> list[tuple[datetime, float]]:
-        """Return (hour_dt, price) pairs for the next 24h from the forecast sensor.
+    @staticmethod
+    def _to_local_hour(dt: datetime, tz) -> datetime:
+        """Convert a datetime to local timezone and truncate to the hour."""
+        return dt.astimezone(tz).replace(minute=0, second=0, microsecond=0)
 
-        Supports three attribute formats:
+    @staticmethod
+    def _parse_iso(s: str) -> datetime:
+        """Parse ISO-8601 string; handles Z suffix and naive datetimes."""
+        return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+
+    def _get_forecast_prices(self, now: datetime, hours: int = 24) -> list[tuple[datetime, float]]:
+        """Return (hour_dt, price_eur) pairs from the forecast sensor.
+
+        Supported attribute formats:
         - Zonneplan app:      forecast [{datetime, electricity_price (millionths €)}]
         - Zonneplan template: prices_today/prices_tomorrow [{time, price}]
-        - Nordpool:           raw_today/raw_tomorrow [{start, value}]
+        - Nordpool/ENTSOE:    raw_today/raw_tomorrow [{start, value}]
+        - Tibber:             prices / price_info [{startsAt, total}]
+        - Generic list:       any list attr with {start|time|datetime|startsAt|hour|timestamp,
+                                                   price|value|total|amount|price_ct} entries
         """
         entity_id = self.cfg.get(CONF_PRICE_FORECAST_SENSOR) or self.cfg.get(CONF_DYNAMIC_PRICE_SENSOR)
         if not entity_id:
@@ -345,55 +358,87 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         attrs = state.attributes
         raw_entries: list[dict] = []
+        fmt_name = "unknown"
 
-        # Zonneplan app format: attribute "forecast" with {datetime, electricity_price} entries.
-        # electricity_price is in millionths of a euro (e.g. 3201888 = €0.320/kWh).
-        zonneplan_forecast = attrs.get("forecast", [])
-        if isinstance(zonneplan_forecast, str):
-            try:
-                zonneplan_forecast = json.loads(zonneplan_forecast)
-            except (json.JSONDecodeError, ValueError):
-                zonneplan_forecast = []
-        if isinstance(zonneplan_forecast, list) and zonneplan_forecast:
-            for entry in zonneplan_forecast:
+        def _load_list(val):
+            if isinstance(val, str):
+                try:
+                    val = json.loads(val)
+                except (json.JSONDecodeError, ValueError):
+                    return []
+            return val if isinstance(val, list) else []
+
+        # ── Zonneplan app: attribute "forecast" [{datetime, electricity_price}] ──
+        zp_forecast = _load_list(attrs.get("forecast", []))
+        if zp_forecast and isinstance(zp_forecast[0], dict) and "electricity_price" in zp_forecast[0]:
+            for entry in zp_forecast:
                 if "datetime" in entry and "electricity_price" in entry:
                     raw_entries.append({
                         "time": entry["datetime"],
                         "price": float(entry["electricity_price"]) / 1_000_000,
                     })
+            fmt_name = "Zonneplan-app"
 
-        # Zonneplan template format: prices_today / prices_tomorrow with {time, price}
+        # ── Zonneplan template: prices_today/prices_tomorrow [{time, price}] ──
         if not raw_entries:
             for key in ("prices_today", "prices_tomorrow"):
-                val = attrs.get(key, [])
-                if isinstance(val, str):
-                    try:
-                        val = json.loads(val)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                if isinstance(val, list):
-                    raw_entries.extend(val)
+                raw_entries.extend(_load_list(attrs.get(key, [])))
+            if raw_entries:
+                fmt_name = "Zonneplan-template"
 
-        # Nordpool format — normalise to {time, price}
+        # ── Nordpool / ENTSOE: raw_today/raw_tomorrow [{start, value}] ──
         if not raw_entries:
             for key in ("raw_today", "raw_tomorrow"):
-                val = attrs.get(key, [])
-                if isinstance(val, str):
-                    try:
-                        val = json.loads(val)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-                if isinstance(val, list):
-                    for entry in val:
-                        if "start" in entry and "value" in entry:
-                            raw_entries.append({"time": entry["start"], "price": entry["value"]})
+                for entry in _load_list(attrs.get(key, [])):
+                    if "start" in entry and "value" in entry:
+                        raw_entries.append({"time": entry["start"], "price": entry["value"]})
+            if raw_entries:
+                fmt_name = "Nordpool"
+
+        # ── Tibber: prices / price_info [{startsAt, total}] ──
+        if not raw_entries:
+            for key in ("prices", "price_info", "today", "tomorrow"):
+                for entry in _load_list(attrs.get(key, [])):
+                    if isinstance(entry, dict) and "startsAt" in entry and "total" in entry:
+                        raw_entries.append({"time": entry["startsAt"], "price": entry["total"]})
+            if raw_entries:
+                fmt_name = "Tibber"
+
+        # ── Generic fallback: scan all list attributes for known time/price field names ──
+        if not raw_entries:
+            TIME_KEYS = ("start", "time", "datetime", "startsAt", "hour", "timestamp", "start_time")
+            PRICE_KEYS = ("price", "value", "total", "amount", "price_ct", "electricity_price")
+            for attr_key, attr_val in attrs.items():
+                entries = _load_list(attr_val)
+                if not entries or not isinstance(entries[0], dict):
+                    continue
+                first = entries[0]
+                t_key = next((k for k in TIME_KEYS if k in first), None)
+                p_key = next((k for k in PRICE_KEYS if k in first), None)
+                if t_key and p_key:
+                    multiplier = 1.0
+                    if p_key == "electricity_price":
+                        multiplier = 1 / 1_000_000
+                    elif p_key == "price_ct":
+                        multiplier = 1 / 100
+                    for entry in entries:
+                        if t_key in entry and p_key in entry:
+                            raw_entries.append({"time": entry[t_key], "price": float(entry[p_key]) * multiplier})
+                    fmt_name = f"generic({attr_key}:{t_key}/{p_key})"
+                    break
+
+        if not raw_entries:
+            _LOGGER.debug("%s: no forecast entries found in sensor %s", DOMAIN, entity_id)
+            return []
+
+        _LOGGER.debug("%s: forecast format=%s, raw entries=%d", DOMAIN, fmt_name, len(raw_entries))
 
         cutoff = now + timedelta(hours=hours)
         result: list[tuple[datetime, float]] = []
         for entry in raw_entries:
             try:
-                t = datetime.fromisoformat(str(entry.get("time", "")).replace("Z", "+00:00"))
-                if t.tzinfo is None and now.tzinfo is not None:
+                t = self._parse_iso(entry.get("time", ""))
+                if t.tzinfo is None:
                     t = t.replace(tzinfo=now.tzinfo)
                 p = float(entry.get("price", 0))
                 if now <= t < cutoff:
@@ -401,6 +446,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             except (ValueError, TypeError):
                 continue
 
+        _LOGGER.debug("%s: %d entries within window of %dh", DOMAIN, len(result), hours)
         return sorted(result, key=lambda x: x[0])
 
     def _needed_cheap_hours(self, boiler_temp: float | None, target_temp: float) -> int:
@@ -430,10 +476,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             return False
         cheapest = sorted(prices, key=lambda x: x[1])[:n]
         current_hour = now.replace(minute=0, second=0, microsecond=0)
-        cheapest_starts = {
-            dt.astimezone(now.tzinfo).replace(minute=0, second=0, microsecond=0)
-            for dt, _ in cheapest
-        }
+        cheapest_starts = {self._to_local_hour(dt, now.tzinfo) for dt, _ in cheapest}
         return current_hour in cheapest_starts
 
     # ------------------------------------------------------------------
@@ -619,7 +662,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 )
                 if optimal_t is not None:
                     current_hour = now.replace(minute=0, second=0, microsecond=0)
-                    slot_hour = optimal_t.astimezone(now.tzinfo).replace(minute=0, second=0, microsecond=0)
+                    slot_hour = self._to_local_hour(optimal_t, now.tzinfo)
                     if current_hour == slot_hour:
                         if boiler_temp is None or boiler_temp < target_temp - TEMP_HYSTERESIS:
                             return True, target_temp
@@ -671,7 +714,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
                 cheapest = sorted(prices, key=lambda x: x[1])[:n]
                 for slot_t, _ in cheapest:
-                    slot_hour = slot_t.astimezone(now.tzinfo).replace(minute=0, second=0, microsecond=0)
+                    slot_hour = self._to_local_hour(slot_t, now.tzinfo)
                     if slot_hour > now:
                         candidates.append(slot_hour)
                         break
