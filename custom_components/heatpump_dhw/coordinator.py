@@ -325,7 +325,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         - Zonneplan template: prices_today/prices_tomorrow [{time, price}]
         - Nordpool:           raw_today/raw_tomorrow [{start, value}]
         """
-        entity_id = self.cfg.get(CONF_PRICE_FORECAST_SENSOR)
+        entity_id = self.cfg.get(CONF_PRICE_FORECAST_SENSOR) or self.cfg.get(CONF_DYNAMIC_PRICE_SENSOR)
         if not entity_id:
             return []
         state = self.hass.states.get(entity_id)
