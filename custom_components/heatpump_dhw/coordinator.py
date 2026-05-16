@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from datetime import datetime, timedelta, time as dt_time
 from statistics import mean
 from typing import Any
@@ -116,6 +117,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._heat_up_samples: list[float] = []
         self._cop_samples: list[float] = []
         self._loss_samples: list[float] = []  # °C/hour tank heat loss measurements
+        self._heat_rate_samples: list[float] = []  # °C/hour heating rate measurements
         self._last_legionella_run: datetime | None = None
         self._last_pump_run: datetime | None = None
         self._monthly_savings: float = 0.0
@@ -149,6 +151,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._heat_up_samples = stored.get("heat_up_samples", [])
         self._cop_samples = stored.get("cop_samples", [])
         self._loss_samples = stored.get("loss_samples", [])
+        self._heat_rate_samples = stored.get("heat_rate_samples", [])
         raw_ll = stored.get("last_legionella_run")
         self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
         raw_lp = stored.get("last_pump_run")
@@ -174,6 +177,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "heat_up_samples": self._heat_up_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "cop_samples": self._cop_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "loss_samples": self._loss_samples[-HEAT_UP_SAMPLE_SIZE:],
+                "heat_rate_samples": self._heat_rate_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "last_legionella_run": self._last_legionella_run.isoformat() if self._last_legionella_run else None,
                 "last_pump_run": self._last_pump_run.isoformat() if self._last_pump_run else None,
                 "absence_start": self._absence_start.isoformat() if self._absence_start else None,
@@ -284,6 +288,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             "heat_up_duration_min": round(mean(self._heat_up_samples)) if self._heat_up_samples else None,
             "monthly_savings": self._monthly_savings,
             "learned_loss_rate": round(mean(self._loss_samples), 2) if self._loss_samples else None,
+            "learned_heat_rate": round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None,
             "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp),
         }
 
@@ -387,18 +392,32 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         return sorted(result, key=lambda x: x[0])
 
+    def _needed_cheap_hours(self, boiler_temp: float | None, target_temp: float) -> int:
+        """Calculate how many cheap hours are needed based on learned heating rate."""
+        if boiler_temp is None or boiler_temp >= target_temp - TEMP_HYSTERESIS:
+            return 0
+        if self._heat_rate_samples:
+            rate = mean(self._heat_rate_samples)  # °C/hour
+            return max(1, math.ceil((target_temp - boiler_temp) / rate))
+        # Fallback to configured value before enough data is learned
+        configured = int(self._opt(OPT_CHEAP_HOURS, DEFAULT_CHEAP_HOURS))
+        return configured if configured > 0 else DEFAULT_CHEAP_HOURS
+
     def _effective_window_hours(self) -> int:
         """Return the configured price window; 0 means use all available data (168h)."""
         w = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
         return 168 if w == 0 else w
 
-    def _is_cheap_hour(self, now: datetime) -> bool:
+    def _is_cheap_hour(self, now: datetime, boiler_temp: float | None) -> bool:
         """Return True if current hour is among the cheapest N hours in the price window."""
-        cheap_hours = int(self._opt(OPT_CHEAP_HOURS, DEFAULT_CHEAP_HOURS))
+        normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+        n = self._needed_cheap_hours(boiler_temp, normal_temp)
+        if n == 0:
+            return False
         prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
         if not prices:
             return False
-        cheapest = sorted(prices, key=lambda x: x[1])[:cheap_hours]
+        cheapest = sorted(prices, key=lambda x: x[1])[:n]
         current_hour = now.replace(minute=0, second=0, microsecond=0)
         cheapest_starts = {
             dt.replace(minute=0, second=0, microsecond=0) for dt, _ in cheapest
@@ -471,7 +490,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             and (boiler_temp is None or boiler_temp < normal_temp - TEMP_HYSTERESIS)
         ):
             price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
-            use_forecast = self._is_cheap_hour(now)
+            use_forecast = self._is_cheap_hour(now, boiler_temp)
             use_threshold = not use_forecast and price_eur is not None and price_eur <= price_threshold
             if use_forecast or use_threshold:
                 return MODE_PRICE, normal_temp
@@ -514,6 +533,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         shower_dt: datetime,
         required_temp: float,
         heat_up_min: float,
+        boiler_temp: float | None = None,
     ) -> tuple[datetime | None, float]:
         """Find cheapest hour to pre-heat for a shower, with heat-loss buffer.
 
@@ -535,8 +555,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         if not feasible:
             return None, required_temp
 
-        # Find which hours are "cheap" in the full window (same N as price mode)
-        cheap_n = int(self._opt(OPT_CHEAP_HOURS, DEFAULT_CHEAP_HOURS))
+        # Calculate needed hours dynamically; fall back to configured value
+        cheap_n = self._needed_cheap_hours(boiler_temp, required_temp)
         cheapest_times = {
             t for t, _ in sorted(all_prices, key=lambda x: x[1])[:cheap_n]
         }
@@ -583,7 +603,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
                 # Try price-optimal slot first
                 optimal_t, target_temp = self._find_optimal_shower_slot(
-                    now, shower_dt, required_temp, heat_up_min
+                    now, shower_dt, required_temp, heat_up_min, boiler_temp
                 )
                 if optimal_t is not None:
                     current_hour = now.replace(minute=0, second=0, microsecond=0)
@@ -779,6 +799,16 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._heat_up_samples.append(duration_min)
             if len(self._heat_up_samples) > HEAT_UP_SAMPLE_SIZE:
                 self._heat_up_samples.pop(0)
+
+            # Track heating rate (°C/hour) for dynamic cheap-hours calculation
+            start_temp = self._session_start_temp
+            if start_temp is not None and boiler_temp > start_temp and duration_min > 0:
+                delta_t = boiler_temp - start_temp
+                rate = delta_t / (duration_min / 60)
+                if 1.0 <= rate <= 50.0:
+                    self._heat_rate_samples.append(rate)
+                    if len(self._heat_rate_samples) > HEAT_UP_SAMPLE_SIZE:
+                        self._heat_rate_samples.pop(0)
 
             final_cop = sess.get("cop")
             if final_cop:
