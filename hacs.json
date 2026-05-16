@@ -1,4 +1,5 @@
 {
   "name": "Heat Pump DHW",
-  "render_readme": true
+  "render_readme": true,
+  "icon": "https://raw.githubusercontent.com/FutureCow/ha-heatpump-dhw/master/icon.png"
 }
