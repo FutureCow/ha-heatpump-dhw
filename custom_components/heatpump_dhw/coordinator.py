@@ -651,6 +651,19 @@ class DHWCoordinator(DataUpdateCoordinator):
                         candidates.append(start_dt)
                 break  # only first occurrence per schedule
 
+        # Also consider next cheap price hour (if price mode enabled and boiler needs heating)
+        if self.price_mode_enabled:
+            boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
+            n = self._needed_cheap_hours(boiler_temp, normal_temp)
+            if n > 0:
+                prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
+                cheapest = sorted(prices, key=lambda x: x[1])[:n]
+                for slot_t, _ in cheapest:
+                    slot_hour = slot_t.replace(minute=0, second=0, microsecond=0)
+                    if slot_hour > now:
+                        candidates.append(slot_hour)
+                        break
+
         return min(candidates) if candidates else None
 
     # ------------------------------------------------------------------
