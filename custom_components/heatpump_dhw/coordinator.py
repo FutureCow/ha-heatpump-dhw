@@ -213,6 +213,17 @@ class DHWCoordinator(DataUpdateCoordinator):
         except (ValueError, TypeError):
             return None
 
+    def _state_watts(self, entity_id: str | None) -> float | None:
+        """Read a power sensor and convert kW → W automatically."""
+        value = self._state_float(entity_id)
+        if value is None:
+            return None
+        state = self.hass.states.get(entity_id)
+        uom = (state.attributes.get("unit_of_measurement") or "").lower()
+        if uom in ("kw", "kilowatt", "kilowatts"):
+            value *= 1000
+        return value
+
     def _state_bool(self, entity_id: str | None) -> bool | None:
         if not entity_id:
             return None
@@ -249,7 +260,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
         power_w = self._state_float(self.cfg.get(CONF_POWER_SENSOR))
-        surplus_w = self._state_float(self.cfg.get(CONF_PV_SURPLUS_SENSOR))
+        surplus_w = self._state_watts(self.cfg.get(CONF_PV_SURPLUS_SENSOR))
         price_eur = self._state_float(self.cfg.get(CONF_DYNAMIC_PRICE_SENSOR))
         outside_temp = self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR))
         present = self._state_bool(self.cfg.get(CONF_PRESENCE_SENSOR))
