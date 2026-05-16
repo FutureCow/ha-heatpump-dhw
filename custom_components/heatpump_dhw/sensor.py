@@ -151,6 +151,14 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:thermometer-minus",
     ),
+    DHWSensorDescription(
+        key="learned_heat_rate",
+        data_key="learned_heat_rate",
+        name="Gemeten verwarmingssnelheid",
+        native_unit_of_measurement="°C/h",
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:thermometer-plus",
+    ),
 )
 
 
