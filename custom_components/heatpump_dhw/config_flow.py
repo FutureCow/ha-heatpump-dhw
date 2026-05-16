@@ -166,7 +166,7 @@ class DHWConfigFlow(ConfigFlow, domain=DOMAIN):
             title = "Heat Pump DHW"
             return self.async_create_entry(title=title, data=self._data)
 
-        schema = _defaults_schema()
+        schema = _defaults_schema(show_legionella_details=False)
         return self.async_show_form(step_id="defaults", data_schema=schema)
 
     @staticmethod
@@ -258,8 +258,11 @@ class DHWOptionsFlow(OptionsFlow):
         return self.async_show_form(step_id="shower_schedules", data_schema=schema)
 
 
-def _defaults_schema(current: dict | None = None) -> vol.Schema:
-    """Build the thresholds schema, pre-filled with current values if given."""
+def _defaults_schema(current: dict | None = None, show_legionella_details: bool = True) -> vol.Schema:
+    """Build the thresholds schema, pre-filled with current values if given.
+
+    show_legionella_details=False during initial setup: day/hour/temp only in options.
+    """
     c = current or {}
 
     def _n(key, default):
@@ -301,26 +304,28 @@ def _defaults_schema(current: dict | None = None) -> vol.Schema:
                 NumberSelectorConfig(min=1, max=72, step=1, unit_of_measurement="uur", mode=NumberSelectorMode.BOX)
             ),
             vol.Optional(OPT_LEGIONELLA_MODE_ENABLED, default=_n(OPT_LEGIONELLA_MODE_ENABLED, True)): BooleanSelector(),
-            vol.Optional(OPT_LEGIONELLA_TEMP, default=_n(OPT_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)): NumberSelector(
-                NumberSelectorConfig(min=60, max=80, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
-            ),
-            vol.Optional(OPT_LEGIONELLA_DAY, default=_n(OPT_LEGIONELLA_DAY, DEFAULT_LEGIONELLA_DAY)): SelectSelector(
-                SelectSelectorConfig(
-                    options=[
-                        SelectOptionDict(value="0", label="Maandag"),
-                        SelectOptionDict(value="1", label="Dinsdag"),
-                        SelectOptionDict(value="2", label="Woensdag"),
-                        SelectOptionDict(value="3", label="Donderdag"),
-                        SelectOptionDict(value="4", label="Vrijdag"),
-                        SelectOptionDict(value="5", label="Zaterdag"),
-                        SelectOptionDict(value="6", label="Zondag"),
-                    ],
-                    mode=SelectSelectorMode.LIST,
-                )
-            ),
-            vol.Optional(OPT_LEGIONELLA_HOUR, default=_n(OPT_LEGIONELLA_HOUR, DEFAULT_LEGIONELLA_HOUR)): NumberSelector(
-                NumberSelectorConfig(min=0, max=23, step=1, unit_of_measurement="u", mode=NumberSelectorMode.BOX)
-            ),
+            **({
+                OPT_LEGIONELLA_TEMP: NumberSelector(
+                    NumberSelectorConfig(min=60, max=80, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
+                ),
+                OPT_LEGIONELLA_DAY: SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(value="0", label="Maandag"),
+                            SelectOptionDict(value="1", label="Dinsdag"),
+                            SelectOptionDict(value="2", label="Woensdag"),
+                            SelectOptionDict(value="3", label="Donderdag"),
+                            SelectOptionDict(value="4", label="Vrijdag"),
+                            SelectOptionDict(value="5", label="Zaterdag"),
+                            SelectOptionDict(value="6", label="Zondag"),
+                        ],
+                        mode=SelectSelectorMode.LIST,
+                    )
+                ),
+                OPT_LEGIONELLA_HOUR: NumberSelector(
+                    NumberSelectorConfig(min=0, max=23, step=1, unit_of_measurement="u", mode=NumberSelectorMode.BOX)
+                ),
+            } if show_legionella_details else {}),
             vol.Optional(OPT_REFERENCE_PRICE_EUR, default=_n(OPT_REFERENCE_PRICE_EUR, DEFAULT_REFERENCE_PRICE_EUR)): NumberSelector(
                 NumberSelectorConfig(min=0, max=2, step=0.01, unit_of_measurement="€/kWh", mode=NumberSelectorMode.BOX)
             ),
