@@ -431,7 +431,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         cheapest = sorted(prices, key=lambda x: x[1])[:n]
         current_hour = now.replace(minute=0, second=0, microsecond=0)
         cheapest_starts = {
-            dt.replace(minute=0, second=0, microsecond=0) for dt, _ in cheapest
+            dt.astimezone(now.tzinfo).replace(minute=0, second=0, microsecond=0)
+            for dt, _ in cheapest
         }
         return current_hour in cheapest_starts
 
@@ -618,7 +619,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 )
                 if optimal_t is not None:
                     current_hour = now.replace(minute=0, second=0, microsecond=0)
-                    slot_hour = optimal_t.replace(minute=0, second=0, microsecond=0)
+                    slot_hour = optimal_t.astimezone(now.tzinfo).replace(minute=0, second=0, microsecond=0)
                     if current_hour == slot_hour:
                         if boiler_temp is None or boiler_temp < target_temp - TEMP_HYSTERESIS:
                             return True, target_temp
@@ -670,7 +671,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
                 cheapest = sorted(prices, key=lambda x: x[1])[:n]
                 for slot_t, _ in cheapest:
-                    slot_hour = slot_t.replace(minute=0, second=0, microsecond=0)
+                    slot_hour = slot_t.astimezone(now.tzinfo).replace(minute=0, second=0, microsecond=0)
                     if slot_hour > now:
                         candidates.append(slot_hour)
                         break
