@@ -20,6 +20,7 @@ from .const import (
     CONF_DYNAMIC_PRICE_SENSOR,
     CONF_ENERGY_METER_SENSOR,
     CONF_PRICE_FORECAST_SENSOR,
+    CONF_EHEATER_SETPOINT_ENTITY,
     CONF_EHEATER_SWITCH,
     CONF_HEATPUMP_SWITCH,
     CONF_NOTIFY_SERVICE,
@@ -892,12 +893,26 @@ class DHWCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.warning("DHW: kon doeltemperatuur niet instellen op %s: %s", entity_id, err)
 
+        # Optional separate setpoint entity for the electric heater
+        eheater_setpoint = self.cfg.get(CONF_EHEATER_SETPOINT_ENTITY)
+        if eheater_setpoint and self.cfg.get(CONF_EHEATER_SWITCH):
+            try:
+                await self.hass.services.async_call(
+                    eheater_setpoint.split(".")[0],
+                    "set_value",
+                    {"entity_id": eheater_setpoint, "value": temp},
+                    blocking=True,
+                )
+            except Exception as err:
+                _LOGGER.warning("DHW: kon eheater setpoint niet instellen op %s: %s", eheater_setpoint, err)
+
     async def _turn_on_heatpump(self) -> None:
-        sw = self.cfg.get(CONF_HEATPUMP_SWITCH)
-        if sw:
-            await self.hass.services.async_call(
-                "homeassistant", "turn_on", {"entity_id": sw}, blocking=True
-            )
+        for key in (CONF_HEATPUMP_SWITCH, CONF_EHEATER_SWITCH):
+            sw = self.cfg.get(key)
+            if sw:
+                await self.hass.services.async_call(
+                    "homeassistant", "turn_on", {"entity_id": sw}, blocking=True
+                )
 
     async def _turn_off_heatpump(self) -> None:
         for key in (CONF_HEATPUMP_SWITCH, CONF_EHEATER_SWITCH):

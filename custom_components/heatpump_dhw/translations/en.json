@@ -17,7 +17,7 @@
           "target_temp_entity": "Target temperature setting",
           "heatpump_switch": "Heat pump on/off switch",
           "eheater_switch": "Electric element switch (optional)",
-          "eheater_boost_temp_entity": "Boost temperature setting (optional)"
+          "eheater_setpoint_entity": "Electric element setpoint entity (optional — for boilers that require a separate setpoint to activate the electric element)"
         }
       },
       "grid": {

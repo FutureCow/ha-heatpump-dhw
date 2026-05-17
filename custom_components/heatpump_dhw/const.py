@@ -12,6 +12,7 @@ CONF_ENERGY_METER_SENSOR = "energy_meter_sensor"
 CONF_TARGET_TEMP_ENTITY = "target_temp_entity"
 CONF_HEATPUMP_SWITCH = "heatpump_switch"
 CONF_EHEATER_SWITCH = "eheater_switch"
+CONF_EHEATER_SETPOINT_ENTITY = "eheater_setpoint_entity"
 # Config keys — grid/solar sensors
 CONF_PV_SURPLUS_SENSOR = "pv_surplus_sensor"
 CONF_DYNAMIC_PRICE_SENSOR = "dynamic_price_sensor"
