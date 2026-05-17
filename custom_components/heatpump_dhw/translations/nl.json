@@ -80,6 +80,8 @@
       "thresholds": {
         "title": "Drempelwaarden & temperaturen",
         "data": {
+          "price_forecast_sensor": "Prijsvoorspelling sensor (optioneel)",
+          "dynamic_price_sensor": "Huidige prijs sensor (optioneel)",
           "solar_mode_enabled": "Zonne-energie modus",
           "solar_threshold_w": "Min. overschot voor zonne-modus (W)",
           "boost_mode_enabled": "Boost modus",

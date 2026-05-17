@@ -80,6 +80,8 @@
       "thresholds": {
         "title": "Thresholds & temperatures",
         "data": {
+          "price_forecast_sensor": "Price forecast sensor (optional)",
+          "dynamic_price_sensor": "Current price sensor (optional)",
           "solar_mode_enabled": "Solar surplus mode",
           "solar_threshold_w": "Min. surplus for solar mode (W)",
           "boost_mode_enabled": "Boost mode",
