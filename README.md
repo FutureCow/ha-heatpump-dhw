@@ -66,17 +66,30 @@ Hieronder staat per sensor welke eenheid en welk formaat verwacht wordt. Verkeer
 
 De prijsvoorspelling sensor (`price_forecast_sensor`) wordt gebruikt voor de "goedkoopste X uur" modus. De integratie herkent automatisch welk formaat de sensor gebruikt:
 
-**Zonneplan formaat** — attributen `prices_today` en `prices_tomorrow`, elk een lijst van objecten met `time` en `price`:
+**Zonneplan app** — attribuut `forecast` met `datetime` en `electricity_price` (in miljoensten van een euro):
+```json
+[{"datetime": "2024-01-15T14:00:00+01:00", "electricity_price": 87500}, ...]
+```
+Gebruik hiervoor `sensor.zonneplan_current_electricity_tariff`.
+
+**Zonneplan template** — attributen `prices_today` en `prices_tomorrow` met `time` en `price`:
 ```json
 [{"time": "2024-01-15T14:00:00+01:00", "price": 0.087}, ...]
 ```
 
-**Nordpool formaat** — attributen `raw_today` en `raw_tomorrow`, elk een lijst van objecten met `start` en `value`:
+**Nordpool / ENTSO-E** — attributen `raw_today` en `raw_tomorrow` met `start` en `value`:
 ```json
 [{"start": "2024-01-15T14:00:00+01:00", "value": 0.087}, ...]
 ```
 
-De integratie probeert eerst het Zonneplan formaat. Als er geen `prices_today`/`prices_tomorrow` attributen zijn, wordt automatisch het Nordpool formaat geprobeerd. Als er geen voorspelling beschikbaar is, valt de prijsmodus terug op de gewone drempelwaarde.
+**Tibber** — attributen `prices` of `price_info` met `startsAt` en `total`:
+```json
+[{"startsAt": "2024-01-15T14:00:00+01:00", "total": 0.087}, ...]
+```
+
+**Generieke fallback** — als geen van de bovenstaande formaten herkend wordt, scant de integratie automatisch alle list-attributen op bekende veld-namen (`start`, `time`, `datetime`, `startsAt`, `hour` voor tijd; `price`, `value`, `total`, `amount` voor prijs). Werkt met vrijwel elke energieprijs-sensor.
+
+Als er geen voorspelling beschikbaar is, valt de prijsmodus terug op de gewone drempelwaarde (huidige prijs ≤ maximum prijs).
 
 ### Optionele sensoren
 
@@ -96,11 +109,13 @@ De integratie wordt ingesteld via een UI wizard met 5 stappen:
 
 1. **Hardware sensoren** — boiler temperatuur, verbruiksmeter
 2. **Hardware bediening** — doeltemperatuur, warmtepomp schakelaar, elektrisch element
-3. **Zon & prijzen** — PV overschot sensor, Zonneplan prijs sensor
+3. **Zon & prijzen** — PV overschot sensor, prijsvoorspelling sensor, huidige prijs sensor
 4. **Optionele sensoren** — weer, aanwezigheid, notificatie service
 5. **Drempelwaarden** — overschot drempel, prijsdrempel, temperaturen
 
-Na installatie zijn alle drempelwaarden ook aanpasbaar via number-entiteiten in HA.
+Na installatie zijn alle instellingen aanpasbaar via **Instellingen → Integraties → Heat Pump DHW → Configureren**:
+- **Drempelwaarden & temperaturen** — alle drempelwaarden, temperaturen én sensoren (prijsvoorspelling, huidige prijs)
+- **Douche schema's** — tot 3 douche-momenten met tijd, dagen en temperatuur
 
 ## Dashboard card
 
@@ -146,17 +161,32 @@ Per schema stel je in:
 
 De integratie berekent automatisch wanneer het voorverwarmen moet starten op basis van de geleerde opwarmtijd.
 
+## Vakantie modus
+
+De vakantie modus houdt de boiler op een minimale temperatuur (standaard 40°C) bij afwezigheid.
+
+**Automatische activering** — als je een aanwezigheid-sensor hebt ingesteld en deze geeft langer dan de ingestelde drempel (standaard 24 uur) `off`/`not_home` aan, activeert de vakantie modus automatisch.
+
+**Handmatige schakelaar** — zet `switch.dhw_vacation_mode` aan voor een geplande vakantie.
+
+**Op afstand uitzetten** — zet de schakelaar uit via de HA app. De auto-detectie reset direct en de integratie valt terug op de normale schema's (douche-schema's, prijsmodus).
+
+**Douche schema's tijdens vakantie** — schema's worden automatisch overgeslagen zolang vakantie modus actief is. Na het uitzetten van de modus worden schema's weer normaal uitgevoerd.
+
+**Status** — de status-sensor toont `Vakantie — minimum 40°C` zolang de modus actief is, ook als de boiler al op temperatuur is en niet actief verwarmt.
+
 ## Prioriteitsvolgorde
 
 Als meerdere modi tegelijk van toepassing zijn, geldt:
 
-1. Legionella preventie (veiligheid)
-2. Boost modus
-3. Zonne-energie modus
-4. Dynamische prijsmodus
-5. Douche schema
-6. Vakantie modus
-7. Standby
+1. Anti-blokkeer run (pompe te lang stil geweest)
+2. Legionella preventie (veiligheid, ook tijdens vakantie)
+3. Boost modus (groot zonne-overschot)
+4. Zonne-energie modus
+5. Dynamische prijsmodus
+6. Vakantie modus (minimum temperatuur)
+7. Douche schema (overgeslagen tijdens vakantie)
+8. Standby
 
 ## Vereiste entiteiten (minimaal)
 
