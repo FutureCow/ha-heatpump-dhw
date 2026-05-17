@@ -1029,3 +1029,16 @@ class DHWCoordinator(DataUpdateCoordinator):
     @property
     def next_heating(self) -> datetime | None:
         return self._next_heating
+
+    @property
+    def vacation_active(self) -> bool:
+        """True als vakantie modus actief is (manueel of auto-detectie)."""
+        return self._vacation_active
+
+    @vacation_active.setter
+    def vacation_active(self, value: bool) -> None:
+        """Schakelaar schrijft hier — zet ook vacation_mode_enabled en reset absence tracking."""
+        self.vacation_mode_enabled = value
+        self._vacation_active = value
+        if not value:
+            self._absence_start = None
