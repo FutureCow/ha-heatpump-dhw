@@ -56,6 +56,7 @@ from .const import (
     MODE_BOOST,
     MODE_IDLE,
     MODE_LEGIONELLA,
+    MODE_MANUAL,
     MODE_PRICE,
     MODE_SCHEDULE,
     MODE_SOLAR,
@@ -133,6 +134,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         self.boost_mode_enabled: bool = True
         self.legionella_mode_enabled: bool = True
         self.vacation_mode_enabled: bool = False
+
+        self._manual_heat: bool = False
 
         # Absence tracking for delayed vacation mode
         self._absence_start: datetime | None = None
@@ -500,6 +503,13 @@ class DHWCoordinator(DataUpdateCoordinator):
         present: bool | None,
     ) -> tuple[str, float]:
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+
+        # 0. Handmatig aan — reset als boiler op temperatuur is
+        if self._manual_heat:
+            if boiler_temp is not None and boiler_temp >= normal_temp - TEMP_HYSTERESIS:
+                self._manual_heat = False
+            else:
+                return MODE_MANUAL, normal_temp
 
         # 1. Anti-block: force short run if pump idle too long
         anti_block_days = self._opt(OPT_ANTI_BLOCK_DAYS, DEFAULT_ANTI_BLOCK_DAYS)
@@ -1021,6 +1031,8 @@ class DHWCoordinator(DataUpdateCoordinator):
             return f"Legionella preventie → {leg_temp:.0f}°C"
         if mode == MODE_VACATION:
             return f"Vakantie — minimum {desired_temp:.0f}°C{outside}" if desired_temp else f"Vakantie{outside}"
+        if mode == MODE_MANUAL:
+            return f"Handmatig aan{target}{outside}"
         if mode == MODE_ANTI_BLOCK:
             return "Anti-blokkeer run"
         return mode.capitalize()
