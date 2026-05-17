@@ -136,6 +136,8 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # Absence tracking for delayed vacation mode
         self._absence_start: datetime | None = None
+        self._prev_vacation_enabled: bool = False
+        self._vacation_active: bool = False
 
         # Track sent shower warnings to avoid spam
         self._shower_warning_sent: set[str] = set()
@@ -302,7 +304,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             "monthly_savings": self._monthly_savings,
             "learned_loss_rate": round(mean(self._loss_samples), 2) if self._loss_samples else None,
             "learned_heat_rate": round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None,
-            "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp),
+            "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp, desired_temp),
         }
 
     def _learn_heat_loss(self, boiler_temp: float | None, now: datetime) -> None:
@@ -552,15 +554,15 @@ class DHWCoordinator(DataUpdateCoordinator):
             if use_forecast or use_threshold:
                 return MODE_PRICE, normal_temp
 
-        # 6. Shower schedule — pre-heat before planned shower
-        schedule_mode, schedule_temp = self._check_schedule(now, boiler_temp)
-        if schedule_mode:
-            return MODE_SCHEDULE, schedule_temp or normal_temp
+        # 6. Vacation status — determined early so shower schedule can be skipped
+        # If vacation switch just turned off: reset auto-detection so boiler reheats immediately
+        if self._prev_vacation_enabled and not self.vacation_mode_enabled:
+            self._absence_start = None
+        self._prev_vacation_enabled = self.vacation_mode_enabled
 
-        # 7. Vacation — hold minimum temperature after prolonged absence
         absence_hours = self._opt(OPT_VACATION_ABSENCE_HOURS, DEFAULT_VACATION_ABSENCE_HOURS)
         if present is True:
-            self._absence_start = None  # reset on arrival
+            self._absence_start = None
         elif present is False and not self.vacation_mode_enabled:
             if self._absence_start is None:
                 self._absence_start = now
@@ -568,7 +570,16 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._absence_start is not None
             and (now - self._absence_start).total_seconds() / 3600 >= absence_hours
         )
-        if self.vacation_mode_enabled or absent_long_enough:
+        self._vacation_active = self.vacation_mode_enabled or absent_long_enough
+
+        # 7. Shower schedule — skip during vacation (no one home to shower)
+        if not self._vacation_active:
+            schedule_mode, schedule_temp = self._check_schedule(now, boiler_temp)
+            if schedule_mode:
+                return MODE_SCHEDULE, schedule_temp or normal_temp
+
+        # 8. Vacation — hold minimum temperature
+        if self._vacation_active:
             min_temp = self._opt(OPT_VACATION_MIN_TEMP, DEFAULT_VACATION_MIN_TEMP)
             if boiler_temp is None or boiler_temp < min_temp - TEMP_HYSTERESIS:
                 return MODE_VACATION, min_temp
@@ -678,7 +689,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         return False, None
 
     def _calc_next_heating(self, now: datetime) -> datetime | None:
-        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
+        schedules = [] if self._vacation_active else self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
         heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
         window_hours = self._effective_window_hours()
@@ -980,23 +991,29 @@ class DHWCoordinator(DataUpdateCoordinator):
         surplus_w: float | None,
         price_eur: float | None,
         outside_temp: float | None,
+        desired_temp: float | None = None,
     ) -> str:
         mode = self._active_mode
         outside = f" · buiten {outside_temp:.0f}°C" if outside_temp is not None else ""
+        target = f" → {desired_temp:.0f}°C" if desired_temp is not None else ""
         if mode == MODE_IDLE:
+            if self._vacation_active:
+                min_temp = self._opt(OPT_VACATION_MIN_TEMP, DEFAULT_VACATION_MIN_TEMP)
+                return f"Vakantie — minimum {min_temp:.0f}°C{outside}"
             return f"Standby{outside}"
         if mode == MODE_SOLAR:
-            return f"Zonne-energie ({surplus_w:.0f} W overschot){outside}" if surplus_w else f"Zonne-energie{outside}"
+            return f"Zonne-energie ({surplus_w:.0f} W overschot){target}{outside}" if surplus_w else f"Zonne-energie{target}{outside}"
         if mode == MODE_BOOST:
-            return f"Boost ({surplus_w:.0f} W overschot){outside}" if surplus_w else f"Boost{outside}"
+            return f"Boost ({surplus_w:.0f} W overschot){target}{outside}" if surplus_w else f"Boost{target}{outside}"
         if mode == MODE_PRICE:
-            return f"Lage prijs (€{price_eur:.3f}/kWh){outside}" if price_eur else f"Lage prijs{outside}"
+            return f"Lage prijs (€{price_eur:.3f}/kWh){target}{outside}" if price_eur else f"Lage prijs{target}{outside}"
         if mode == MODE_SCHEDULE:
-            return f"Douche schema{outside}"
+            return f"Douche schema{target}{outside}"
         if mode == MODE_LEGIONELLA:
-            return "Legionella preventie"
+            leg_temp = self._opt(OPT_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)
+            return f"Legionella preventie → {leg_temp:.0f}°C"
         if mode == MODE_VACATION:
-            return f"Vakantie modus{outside}"
+            return f"Vakantie — minimum {desired_temp:.0f}°C{outside}" if desired_temp else f"Vakantie{outside}"
         if mode == MODE_ANTI_BLOCK:
             return "Anti-blokkeer run"
         return mode.capitalize()
