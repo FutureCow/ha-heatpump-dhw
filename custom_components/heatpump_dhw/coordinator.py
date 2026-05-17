@@ -176,15 +176,6 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._yearly_cost = stored.get("yearly_cost", 0.0)
         self._yearly_year = stored.get("yearly_year", datetime.now().year)
         self._last_session = stored.get("last_session", {})
-        # Flush any kWh accumulated before a restart that wasn't counted yet
-        leftover_kwh = self._last_session.get("running_kwh", 0.0)
-        if leftover_kwh > 0.0:
-            self._monthly_kwh += leftover_kwh
-            self._monthly_cost += self._last_session.get("running_cost", 0.0)
-            self._yearly_kwh += leftover_kwh
-            self._yearly_cost += self._last_session.get("running_cost", 0.0)
-            self._last_session["running_kwh"] = 0.0
-            self._last_session["running_cost"] = 0.0
 
         opts = self.entry.options
         self.solar_mode_enabled = opts.get(OPT_SOLAR_MODE_ENABLED, True)
@@ -816,16 +807,6 @@ class DHWCoordinator(DataUpdateCoordinator):
             else:
                 await self._turn_off_heatpump()
                 _LOGGER.info("DHW: stop heating previous_mode=%s", prev_mode)
-                # Flush any accumulated kWh/cost not yet counted (interrupted session)
-                sess = self._last_session
-                leftover_kwh = sess.get("running_kwh", 0.0)
-                if leftover_kwh > 0.0:
-                    self._monthly_kwh += leftover_kwh
-                    self._monthly_cost += sess.get("running_cost", 0.0)
-                    self._yearly_kwh += leftover_kwh
-                    self._yearly_cost += sess.get("running_cost", 0.0)
-                    sess["running_kwh"] = 0.0
-                    sess["running_cost"] = 0.0
                 if prev_mode == MODE_LEGIONELLA:
                     self._last_legionella_run = now
                     await self._notify("Legionella preventie run voltooid.")
@@ -905,6 +886,11 @@ class DHWCoordinator(DataUpdateCoordinator):
         kwh_delta = (power_w or 0) * UPDATE_INTERVAL / 3_600_000
         cost_delta = kwh_delta * (price_eur or 0)
 
+        self._monthly_kwh += kwh_delta
+        self._monthly_cost += cost_delta
+        self._yearly_kwh += kwh_delta
+        self._yearly_cost += cost_delta
+
         sess = self._last_session
         sess["running_kwh"] = sess.get("running_kwh", 0.0) + kwh_delta
         sess["running_cost"] = sess.get("running_cost", 0.0) + cost_delta
@@ -947,11 +933,6 @@ class DHWCoordinator(DataUpdateCoordinator):
                 self._cop_samples.append(final_cop)
                 if len(self._cop_samples) > HEAT_UP_SAMPLE_SIZE:
                     self._cop_samples.pop(0)
-
-            self._monthly_kwh += sess["running_kwh"]
-            self._monthly_cost += sess["running_cost"]
-            self._yearly_kwh += sess["running_kwh"]
-            self._yearly_cost += sess["running_cost"]
 
             cop_str = f", COP {final_cop:.1f}" if final_cop else ""
             outside_str = f" (buiten {outside_temp:.0f}°C)" if outside_temp is not None else ""
