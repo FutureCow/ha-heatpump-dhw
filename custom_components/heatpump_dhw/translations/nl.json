@@ -6,7 +6,8 @@
         "description": "Selecteer de sensoren van je warmtepomp boiler.",
         "data": {
           "boiler_temp_sensor": "Boiler watertemperatuur sensor",
-          "power_sensor": "Vermogen/verbruik sensor (optioneel)"
+          "power_sensor": "Vermogen/verbruik sensor (optioneel)",
+          "energy_meter_sensor": "Energiemeter sensor (kWh, optioneel — nauwkeuriger dan vermogenssensor)"
         }
       },
       "controls": {
@@ -82,6 +83,7 @@
         "data": {
           "price_forecast_sensor": "Prijsvoorspelling sensor (optioneel)",
           "dynamic_price_sensor": "Huidige prijs sensor (optioneel)",
+          "energy_meter_sensor": "Energiemeter sensor (kWh, optioneel)",
           "solar_mode_enabled": "Zonne-energie modus",
           "solar_threshold_w": "Min. overschot voor zonne-modus (W)",
           "boost_mode_enabled": "Boost modus",

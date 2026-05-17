@@ -18,6 +18,7 @@ from .const import (
     ANTI_BLOCK_RUN_MINUTES,
     CONF_BOILER_TEMP_SENSOR,
     CONF_DYNAMIC_PRICE_SENSOR,
+    CONF_ENERGY_METER_SENSOR,
     CONF_PRICE_FORECAST_SENSOR,
     CONF_EHEATER_SWITCH,
     CONF_HEATPUMP_SWITCH,
@@ -112,7 +113,13 @@ class DHWCoordinator(DataUpdateCoordinator):
         # Session tracking
         self._session_start: datetime | None = None
         self._session_start_temp: float | None = None
+        self._session_start_meter: float | None = None
         self._last_session: dict = {}
+
+        # Energy meter tracking
+        self._energy_meter_prev: float | None = None
+        self._month_start_meter: float | None = None
+        self._year_start_meter: float | None = None
 
         # Persisted data (loaded from storage)
         self._heat_up_samples: list[float] = []
@@ -175,6 +182,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._yearly_kwh = stored.get("yearly_kwh", 0.0)
         self._yearly_cost = stored.get("yearly_cost", 0.0)
         self._yearly_year = stored.get("yearly_year", datetime.now().year)
+        self._month_start_meter = stored.get("month_start_meter")
+        self._year_start_meter = stored.get("year_start_meter")
         self._last_session = stored.get("last_session", {})
 
         opts = self.entry.options
@@ -203,6 +212,8 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "yearly_kwh": self._yearly_kwh,
                 "yearly_cost": self._yearly_cost,
                 "yearly_year": self._yearly_year,
+                "month_start_meter": self._month_start_meter,
+                "year_start_meter": self._year_start_meter,
                 "last_session": self._last_session,
             }
         )
@@ -282,17 +293,28 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
         power_w = self._state_float(self.cfg.get(CONF_POWER_SENSOR))
+        meter_kwh = self._state_float(self.cfg.get(CONF_ENERGY_METER_SENSOR))
         surplus_w = self._state_watts(self.cfg.get(CONF_PV_SURPLUS_SENSOR))
         price_eur = self._state_float(self.cfg.get(CONF_DYNAMIC_PRICE_SENSOR))
         outside_temp = self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR))
         present = self._state_bool(self.cfg.get(CONF_PRESENCE_SENSOR))
 
+        # Initialize energy meter start values on first reading
+        if meter_kwh is not None:
+            if self._month_start_meter is None:
+                self._month_start_meter = meter_kwh
+            if self._year_start_meter is None:
+                self._year_start_meter = meter_kwh
+
         desired_mode, desired_temp = self._decide_mode(
             now, boiler_temp, surplus_w, price_eur, present
         )
 
-        await self._apply_control(desired_mode, desired_temp, boiler_temp, power_w, now)
-        await self._track_session(boiler_temp, power_w, price_eur, outside_temp, now)
+        await self._apply_control(desired_mode, desired_temp, boiler_temp, power_w, meter_kwh, now)
+        await self._track_session(boiler_temp, power_w, price_eur, outside_temp, meter_kwh, now)
+
+        # Update meter prev after track_session has used it
+        self._energy_meter_prev = meter_kwh
         self._learn_heat_loss(boiler_temp, now)
         await self._check_shower_readiness(now, boiler_temp)
 
@@ -302,10 +324,12 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._monthly_kwh = 0.0
             self._monthly_cost = 0.0
             self._monthly_month = now.month
+            self._month_start_meter = meter_kwh
         if now.year != self._yearly_year:
             self._yearly_kwh = 0.0
             self._yearly_cost = 0.0
             self._yearly_year = now.year
+            self._year_start_meter = meter_kwh
 
         await self._save_state()
 
@@ -317,15 +341,27 @@ class DHWCoordinator(DataUpdateCoordinator):
             "outside_temp": outside_temp,
             "active_mode": self._active_mode,
             "heating": self._heating,
-            "session_kwh": self._last_session.get("kwh", 0.0),
+            "session_kwh": (
+                round(meter_kwh - self._session_start_meter, 3)
+                if meter_kwh is not None and self._session_start_meter is not None and self._heating
+                else self._last_session.get("kwh", 0.0)
+            ),
             "session_cost": self._last_session.get("cost", 0.0),
             "session_cop": self._last_session.get("cop"),
             "avg_cop": mean(self._cop_samples) if self._cop_samples else None,
             "next_heating": self._next_heating.isoformat() if self._next_heating else None,
             "heat_up_duration_min": round(mean(self._heat_up_samples)) if self._heat_up_samples else None,
-            "monthly_kwh": self._monthly_kwh,
+            "monthly_kwh": (
+                round(meter_kwh - self._month_start_meter, 3)
+                if meter_kwh is not None and self._month_start_meter is not None
+                else round(self._monthly_kwh, 3)
+            ),
             "monthly_cost": self._monthly_cost,
-            "yearly_kwh": self._yearly_kwh,
+            "yearly_kwh": (
+                round(meter_kwh - self._year_start_meter, 3)
+                if meter_kwh is not None and self._year_start_meter is not None
+                else round(self._yearly_kwh, 3)
+            ),
             "yearly_cost": self._yearly_cost,
             "learned_loss_rate": round(mean(self._loss_samples), 2) if self._loss_samples else None,
             "learned_heat_rate": round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None,
@@ -780,6 +816,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         desired_temp: float,
         boiler_temp: float | None,
         power_w: float | None,
+        meter_kwh: float | None,
         now: datetime,
     ) -> None:
         should_heat = mode != MODE_IDLE
@@ -801,6 +838,8 @@ class DHWCoordinator(DataUpdateCoordinator):
                 await self._turn_on_heatpump()
                 self._session_start = now
                 self._session_start_temp = boiler_temp
+                self._session_start_meter = meter_kwh
+                self._energy_meter_prev = meter_kwh
                 self._last_session = {"running_kwh": 0.0, "running_cost": 0.0}
                 _LOGGER.info("DHW: start heating mode=%s target=%.1f°C", mode, desired_temp)
                 await self._notify(f"Boiler verwarming gestart ({mode}), doel: {desired_temp:.0f}°C")
@@ -878,12 +917,16 @@ class DHWCoordinator(DataUpdateCoordinator):
         power_w: float | None,
         price_eur: float | None,
         outside_temp: float | None,
+        meter_kwh: float | None,
         now: datetime,
     ) -> None:
         if not self._heating or self._session_start is None:
             return
 
-        kwh_delta = (power_w or 0) * UPDATE_INTERVAL / 3_600_000
+        if meter_kwh is not None and self._energy_meter_prev is not None:
+            kwh_delta = max(0.0, meter_kwh - self._energy_meter_prev)
+        else:
+            kwh_delta = (power_w or 0) * UPDATE_INTERVAL / 3_600_000
         cost_delta = kwh_delta * (price_eur or 0)
 
         self._monthly_kwh += kwh_delta

@@ -6,7 +6,8 @@
         "description": "Select the sensors of your heat pump boiler.",
         "data": {
           "boiler_temp_sensor": "Boiler water temperature sensor",
-          "power_sensor": "Power / consumption sensor (optional)"
+          "power_sensor": "Power / consumption sensor (optional)",
+          "energy_meter_sensor": "Energy meter sensor (kWh, optional — more accurate than power sensor)"
         }
       },
       "controls": {
@@ -82,6 +83,7 @@
         "data": {
           "price_forecast_sensor": "Price forecast sensor (optional)",
           "dynamic_price_sensor": "Current price sensor (optional)",
+          "energy_meter_sensor": "Energy meter sensor (kWh, optional)",
           "solar_mode_enabled": "Solar surplus mode",
           "solar_threshold_w": "Min. surplus for solar mode (W)",
           "boost_mode_enabled": "Boost mode",

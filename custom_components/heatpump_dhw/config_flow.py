@@ -22,6 +22,7 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_BOILER_TEMP_SENSOR,
     CONF_DYNAMIC_PRICE_SENSOR,
+    CONF_ENERGY_METER_SENSOR,
     CONF_EHEATER_SWITCH,
     CONF_HEATPUMP_SWITCH,
     CONF_NOTIFY_SERVICE,
@@ -96,6 +97,7 @@ class DHWConfigFlow(ConfigFlow, domain=DOMAIN):
             {
                 vol.Required(CONF_BOILER_TEMP_SENSOR): EntitySelector(_SENSOR),
                 vol.Optional(CONF_POWER_SENSOR): EntitySelector(_SENSOR),
+                vol.Optional(CONF_ENERGY_METER_SENSOR): EntitySelector(_SENSOR),
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema)
@@ -212,6 +214,10 @@ class DHWOptionsFlow(OptionsFlow):
             vol.Optional(
                 CONF_DYNAMIC_PRICE_SENSOR,
                 description={"suggested_value": current.get(CONF_DYNAMIC_PRICE_SENSOR, "")},
+            ): EntitySelector(_SENSOR),
+            vol.Optional(
+                CONF_ENERGY_METER_SENSOR,
+                description={"suggested_value": current.get(CONF_ENERGY_METER_SENSOR, "")},
             ): EntitySelector(_SENSOR),
         }
         schema = vol.Schema({**sensor_fields, **_defaults_fields(current)})
