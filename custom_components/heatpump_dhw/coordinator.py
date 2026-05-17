@@ -322,11 +322,19 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._next_heating = self._calc_next_heating(now)
 
         if now.month != self._monthly_month:
+            _LOGGER.debug(
+                "DHW: maandelijkse reset (opgeslagen maand=%s, huidige maand=%s, kosten voor reset=%.3f)",
+                self._monthly_month, now.month, self._monthly_cost,
+            )
             self._monthly_kwh = 0.0
             self._monthly_cost = 0.0
             self._monthly_month = now.month
             self._month_start_meter = meter_kwh
         if now.year != self._yearly_year:
+            _LOGGER.debug(
+                "DHW: jaarlijkse reset (opgeslagen jaar=%s, huidig jaar=%s, kosten voor reset=%.3f)",
+                self._yearly_year, now.year, self._yearly_cost,
+            )
             self._yearly_kwh = 0.0
             self._yearly_cost = 0.0
             self._yearly_year = now.year
@@ -956,6 +964,10 @@ class DHWCoordinator(DataUpdateCoordinator):
         else:
             kwh_delta = (power_w or 0) * UPDATE_INTERVAL / 3_600_000
         cost_delta = kwh_delta * (price_eur or 0)
+        _LOGGER.debug(
+            "DHW session tick: kwh_delta=%.4f cost_delta=%.5f price=%.4f monthly_cost_before=%.4f",
+            kwh_delta, cost_delta, price_eur or 0, self._monthly_cost,
+        )
 
         self._monthly_kwh += kwh_delta
         self._monthly_cost += cost_delta
