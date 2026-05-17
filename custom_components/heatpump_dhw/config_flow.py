@@ -210,7 +210,18 @@ class DHWOptionsFlow(OptionsFlow):
             new_options = {**self._config_entry.options, **user_input}
             return self.async_create_entry(title="", data=new_options)
 
-        schema = _defaults_schema(self._config_entry.options)
+        current = {**self._config_entry.data, **self._config_entry.options}
+        sensor_fields = {
+            vol.Optional(
+                CONF_PRICE_FORECAST_SENSOR,
+                description={"suggested_value": current.get(CONF_PRICE_FORECAST_SENSOR, "")},
+            ): EntitySelector(_SENSOR),
+            vol.Optional(
+                CONF_DYNAMIC_PRICE_SENSOR,
+                description={"suggested_value": current.get(CONF_DYNAMIC_PRICE_SENSOR, "")},
+            ): EntitySelector(_SENSOR),
+        }
+        schema = vol.Schema({**sensor_fields, **_defaults_fields(current)})
         return self.async_show_form(step_id="thresholds", data_schema=schema)
 
     async def async_step_shower_schedules(self, user_input=None):
@@ -258,18 +269,14 @@ class DHWOptionsFlow(OptionsFlow):
         return self.async_show_form(step_id="shower_schedules", data_schema=schema)
 
 
-def _defaults_schema(current: dict | None = None, show_legionella_details: bool = True) -> vol.Schema:
-    """Build the thresholds schema, pre-filled with current values if given.
-
-    show_legionella_details=False during initial setup: day/hour/temp only in options.
-    """
+def _defaults_fields(current: dict | None = None, show_legionella_details: bool = True) -> dict:
+    """Return dict of threshold fields, pre-filled with current values if given."""
     c = current or {}
 
     def _n(key, default):
         return c.get(key, default)
 
-    return vol.Schema(
-        {
+    return {
             vol.Optional(OPT_SOLAR_MODE_ENABLED, default=_n(OPT_SOLAR_MODE_ENABLED, True)): BooleanSelector(),
             vol.Optional(OPT_SOLAR_THRESHOLD_W, default=_n(OPT_SOLAR_THRESHOLD_W, DEFAULT_SOLAR_THRESHOLD_W)): NumberSelector(
                 NumberSelectorConfig(min=0, max=10000, step=50, unit_of_measurement="W", mode=NumberSelectorMode.BOX)
@@ -337,4 +344,8 @@ def _defaults_schema(current: dict | None = None, show_legionella_details: bool 
             ),
             vol.Optional(OPT_PREDICTIVE_HEATING, default=_n(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)): BooleanSelector(),
         }
-    )
+
+
+def _defaults_schema(current: dict | None = None, show_legionella_details: bool = True) -> vol.Schema:
+    """Wrap _defaults_fields in a vol.Schema."""
+    return vol.Schema(_defaults_fields(current, show_legionella_details))

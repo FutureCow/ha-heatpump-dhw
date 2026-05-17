@@ -192,11 +192,13 @@ class DHWCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------
 
     def _opt(self, key: str, default):
-        return self.entry.options.get(key, default)
+        if key in self.entry.options:
+            return self.entry.options[key]
+        return self.entry.data.get(key, default)
 
     @property
     def cfg(self):
-        return self.entry.data
+        return {**self.entry.data, **self.entry.options}
 
     # ------------------------------------------------------------------
     # Sensor reading helpers
