@@ -121,8 +121,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._heat_rate_samples: list[float] = []  # °C/hour heating rate measurements
         self._last_legionella_run: datetime | None = None
         self._last_pump_run: datetime | None = None
-        self._monthly_savings: float = 0.0
-        self._savings_month: int = datetime.now().month
+        self._monthly_kwh: float = 0.0
+        self._monthly_cost: float = 0.0
+        self._monthly_month: int = datetime.now().month
 
         # For auto-learning heat loss rate
         self._last_idle_temp: float | None = None
@@ -165,8 +166,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._absence_start = datetime.fromisoformat(raw_abs) if raw_abs else None
         self._vacation_manual = stored.get("vacation_manual", False)
         self._vacation_active = self._vacation_manual
-        self._monthly_savings = stored.get("monthly_savings", 0.0)
-        self._savings_month = stored.get("savings_month", datetime.now().month)
+        self._monthly_kwh = stored.get("monthly_kwh", 0.0)
+        self._monthly_cost = stored.get("monthly_cost", 0.0)
+        self._monthly_month = stored.get("monthly_month", datetime.now().month)
         self._last_session = stored.get("last_session", {})
 
         opts = self.entry.options
@@ -189,8 +191,9 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "last_pump_run": self._last_pump_run.isoformat() if self._last_pump_run else None,
                 "absence_start": self._absence_start.isoformat() if self._absence_start else None,
                 "vacation_manual": self._vacation_manual,
-                "monthly_savings": self._monthly_savings,
-                "savings_month": self._savings_month,
+                "monthly_kwh": self._monthly_kwh,
+                "monthly_cost": self._monthly_cost,
+                "monthly_month": self._monthly_month,
                 "last_session": self._last_session,
             }
         )
@@ -286,9 +289,10 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         self._next_heating = self._calc_next_heating(now)
 
-        if now.month != self._savings_month:
-            self._monthly_savings = 0.0
-            self._savings_month = now.month
+        if now.month != self._monthly_month:
+            self._monthly_kwh = 0.0
+            self._monthly_cost = 0.0
+            self._monthly_month = now.month
 
         await self._save_state()
 
@@ -302,12 +306,12 @@ class DHWCoordinator(DataUpdateCoordinator):
             "heating": self._heating,
             "session_kwh": self._last_session.get("kwh", 0.0),
             "session_cost": self._last_session.get("cost", 0.0),
-            "session_savings": self._last_session.get("savings", 0.0),
             "session_cop": self._last_session.get("cop"),
             "avg_cop": mean(self._cop_samples) if self._cop_samples else None,
             "next_heating": self._next_heating.isoformat() if self._next_heating else None,
             "heat_up_duration_min": round(mean(self._heat_up_samples)) if self._heat_up_samples else None,
-            "monthly_savings": self._monthly_savings,
+            "monthly_kwh": self._monthly_kwh,
+            "monthly_cost": self._monthly_cost,
             "learned_loss_rate": round(mean(self._loss_samples), 2) if self._loss_samples else None,
             "learned_heat_rate": round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None,
             "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp, desired_temp),
@@ -782,7 +786,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 await self._turn_on_heatpump()
                 self._session_start = now
                 self._session_start_temp = boiler_temp
-                self._last_session = {"running_kwh": 0.0, "running_cost": 0.0, "running_savings": 0.0}
+                self._last_session = {"running_kwh": 0.0, "running_cost": 0.0}
                 _LOGGER.info("DHW: start heating mode=%s target=%.1f°C", mode, desired_temp)
                 await self._notify(f"Boiler verwarming gestart ({mode}), doel: {desired_temp:.0f}°C")
             else:
@@ -866,13 +870,10 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         kwh_delta = (power_w or 0) * UPDATE_INTERVAL / 3_600_000
         cost_delta = kwh_delta * (price_eur or 0)
-        ref_price = self._opt(OPT_REFERENCE_PRICE_EUR, DEFAULT_REFERENCE_PRICE_EUR)
-        savings_delta = kwh_delta * max(0.0, ref_price - (price_eur or ref_price))
 
         sess = self._last_session
         sess["running_kwh"] = sess.get("running_kwh", 0.0) + kwh_delta
         sess["running_cost"] = sess.get("running_cost", 0.0) + cost_delta
-        sess["running_savings"] = sess.get("running_savings", 0.0) + savings_delta
         sess["kwh"] = sess["running_kwh"]
         sess["cost"] = sess["running_cost"]
         sess["savings"] = sess["running_savings"]
@@ -914,14 +915,14 @@ class DHWCoordinator(DataUpdateCoordinator):
                 if len(self._cop_samples) > HEAT_UP_SAMPLE_SIZE:
                     self._cop_samples.pop(0)
 
-            self._monthly_savings += sess["running_savings"]
+            self._monthly_kwh += sess["running_kwh"]
+            self._monthly_cost += sess["running_cost"]
 
             cop_str = f", COP {final_cop:.1f}" if final_cop else ""
             outside_str = f" (buiten {outside_temp:.0f}°C)" if outside_temp is not None else ""
             await self._notify(
                 f"Boiler klaar: {sess['running_kwh']:.2f} kWh, "
-                f"€{sess['running_cost']:.2f} kosten, "
-                f"besparing €{sess['running_savings']:.2f}"
+                f"€{sess['running_cost']:.2f} kosten"
                 f"{cop_str}{outside_str}"
             )
             _LOGGER.debug(
@@ -930,7 +931,6 @@ class DHWCoordinator(DataUpdateCoordinator):
             )
             sess["running_kwh"] = 0.0
             sess["running_cost"] = 0.0
-            sess["running_savings"] = 0.0
 
     # ------------------------------------------------------------------
     # Shower readiness warning
