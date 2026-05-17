@@ -440,6 +440,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         _LOGGER.debug("%s: forecast format=%s, raw entries=%d", DOMAIN, fmt_name, len(raw_entries))
 
+        now_hour = now.replace(minute=0, second=0, microsecond=0)
         cutoff = now + timedelta(hours=hours)
         result: list[tuple[datetime, float]] = []
         for entry in raw_entries:
@@ -448,7 +449,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 if t.tzinfo is None:
                     t = t.replace(tzinfo=now.tzinfo)
                 p = float(entry.get("price", 0))
-                if now <= t < cutoff:
+                if now_hour <= t < cutoff:
                     result.append((t, p))
             except (ValueError, TypeError):
                 continue
