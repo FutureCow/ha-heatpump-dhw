@@ -875,8 +875,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         sess["running_kwh"] = sess.get("running_kwh", 0.0) + kwh_delta
         sess["running_cost"] = sess.get("running_cost", 0.0) + cost_delta
         sess["kwh"] = sess["running_kwh"]
-        sess["cost"] = sess["running_cost"]
-        sess["savings"] = sess["running_savings"]
+        sess["cost"] = round(sess["running_cost"], 3)
 
         # COP = thermal energy delivered / electrical energy consumed
         # Thermal energy: Q = volume [L] * 1 kg/L * Cp [kJ/(kg·°C)] * ΔT / 3600 → kWh
