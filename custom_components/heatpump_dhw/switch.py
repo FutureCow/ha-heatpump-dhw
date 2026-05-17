@@ -48,6 +48,12 @@ SWITCHES: tuple[DHWSwitchDescription, ...] = (
         key="vacation_mode",
         name="Vakantie modus",
         icon="mdi:beach",
+        attr="vacation_mode_enabled",
+    ),
+    DHWSwitchDescription(
+        key="on_vacation",
+        name="Op vakantie",
+        icon="mdi:airplane-takeoff",
         attr="vacation_active",
     ),
 )

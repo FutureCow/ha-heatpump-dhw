@@ -148,6 +148,7 @@ solar_switch: switch.dhw_solar_mode
 price_switch: switch.dhw_price_mode
 boost_switch: switch.dhw_boost_mode
 vacation_switch: switch.dhw_vacation_mode
+on_vacation_switch: switch.dhw_on_vacation
 legionella_switch: switch.dhw_legionella_mode
 ```
 
@@ -163,17 +164,25 @@ De integratie berekent automatisch wanneer het voorverwarmen moet starten op bas
 
 ## Vakantie modus
 
-De vakantie modus houdt de boiler op een minimale temperatuur (standaard 40°C) bij afwezigheid.
+De vakantie modus houdt de boiler op een minimale temperatuur (standaard 40°C) bij afwezigheid. Er zijn twee schakelaars:
 
-**Automatische activering** — als je een aanwezigheid-sensor hebt ingesteld en deze geeft langer dan de ingestelde drempel (standaard 24 uur) `off`/`not_home` aan, activeert de vakantie modus automatisch.
+### Schakelaar 1 — "Vakantie modus" (`switch.dhw_vacation_mode`)
+Zet de automatische afwezigheidsdetectie aan of uit. Als een aanwezigheid-sensor is ingesteld en deze geeft langer dan de ingestelde drempel (standaard 24 uur) `off`/`not_home` aan, gaat "Op vakantie" automatisch aan. Als deze schakelaar uit staat, wordt er nooit automatisch vakantie modus geactiveerd.
 
-**Handmatige schakelaar** — zet `switch.dhw_vacation_mode` aan voor een geplande vakantie.
+### Schakelaar 2 — "Op vakantie" (`switch.dhw_on_vacation`)
+De werkelijke vakantie-toestand. Dit is de schakelaar die het verwarmingsgedrag bepaalt.
 
-**Op afstand uitzetten** — zet de schakelaar uit via de HA app. De auto-detectie reset direct en de integratie valt terug op de normale schema's (douche-schema's, prijsmodus).
+| Situatie | Gedrag |
+|----------|--------|
+| Handmatig aan | Vakantie modus actief. Presence sensor negeert deze instelling — alleen handmatig uitzetten stopt de modus. |
+| Automatisch aan (via afwezigheidsdetectie) | Gaat automatisch uit zodra je thuiskomt (presence sensor). |
+| Handmatig uit | Reset ook de afwezigheidsdetectie direct. |
 
-**Douche schema's tijdens vakantie** — schema's worden automatisch overgeslagen zolang vakantie modus actief is. Na het uitzetten van de modus worden schema's weer normaal uitgevoerd.
+**Op afstand uitzetten** — zet `switch.dhw_on_vacation` uit via de HA app onderweg. De boiler valt terug op de normale schema's (douche-schema's, prijsmodus).
 
-**Status** — de status-sensor toont `Vakantie — minimum 40°C` zolang de modus actief is, ook als de boiler al op temperatuur is en niet actief verwarmt.
+**Douche schema's tijdens vakantie** — schema's worden automatisch overgeslagen zolang "Op vakantie" actief is. Na het uitzetten worden schema's weer normaal uitgevoerd.
+
+**Status** — de status-sensor toont `Vakantie — minimum 40°C` zolang vakantie actief is, ook als de boiler al op temperatuur is en niet actief verwarmt.
 
 ## Prioriteitsvolgorde
 

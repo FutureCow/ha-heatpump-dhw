@@ -136,7 +136,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # Absence tracking for delayed vacation mode
         self._absence_start: datetime | None = None
-        self._prev_vacation_enabled: bool = False
+        self._vacation_manual: bool = False   # handmatig "op vakantie" gezet
         self._vacation_active: bool = False
 
         # Track sent shower warnings to avoid spam
@@ -160,6 +160,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._last_pump_run = datetime.fromisoformat(raw_lp) if raw_lp else None
         raw_abs = stored.get("absence_start")
         self._absence_start = datetime.fromisoformat(raw_abs) if raw_abs else None
+        self._vacation_manual = stored.get("vacation_manual", False)
+        self._vacation_active = self._vacation_manual
         self._monthly_savings = stored.get("monthly_savings", 0.0)
         self._savings_month = stored.get("savings_month", datetime.now().month)
         self._last_session = stored.get("last_session", {})
@@ -183,6 +185,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "last_legionella_run": self._last_legionella_run.isoformat() if self._last_legionella_run else None,
                 "last_pump_run": self._last_pump_run.isoformat() if self._last_pump_run else None,
                 "absence_start": self._absence_start.isoformat() if self._absence_start else None,
+                "vacation_manual": self._vacation_manual,
                 "monthly_savings": self._monthly_savings,
                 "savings_month": self._savings_month,
                 "last_session": self._last_session,
@@ -555,22 +558,25 @@ class DHWCoordinator(DataUpdateCoordinator):
                 return MODE_PRICE, normal_temp
 
         # 6. Vacation status — determined early so shower schedule can be skipped
-        # If vacation switch just turned off: reset auto-detection so boiler reheats immediately
-        if self._prev_vacation_enabled and not self.vacation_mode_enabled:
+        # Auto-detectie: alleen als "Vakantie modus" feature aan staat én niet handmatig ingesteld
+        if self.vacation_mode_enabled and not self._vacation_manual:
+            absence_hours = self._opt(OPT_VACATION_ABSENCE_HOURS, DEFAULT_VACATION_ABSENCE_HOURS)
+            if present is True:
+                self._absence_start = None
+                self._vacation_active = False
+            elif present is False:
+                if self._absence_start is None:
+                    self._absence_start = now
+            absent_long_enough = (
+                self._absence_start is not None
+                and (now - self._absence_start).total_seconds() / 3600 >= absence_hours
+            )
+            if absent_long_enough:
+                self._vacation_active = True
+        elif not self.vacation_mode_enabled and not self._vacation_manual:
+            # Feature uitgeschakeld en niet handmatig: reset
             self._absence_start = None
-        self._prev_vacation_enabled = self.vacation_mode_enabled
-
-        absence_hours = self._opt(OPT_VACATION_ABSENCE_HOURS, DEFAULT_VACATION_ABSENCE_HOURS)
-        if present is True:
-            self._absence_start = None
-        elif present is False and not self.vacation_mode_enabled:
-            if self._absence_start is None:
-                self._absence_start = now
-        absent_long_enough = (
-            self._absence_start is not None
-            and (now - self._absence_start).total_seconds() / 3600 >= absence_hours
-        )
-        self._vacation_active = self.vacation_mode_enabled or absent_long_enough
+            self._vacation_active = False
 
         # 7. Shower schedule — skip during vacation (no one home to shower)
         if not self._vacation_active:
@@ -1037,8 +1043,8 @@ class DHWCoordinator(DataUpdateCoordinator):
 
     @vacation_active.setter
     def vacation_active(self, value: bool) -> None:
-        """Schakelaar schrijft hier — zet ook vacation_mode_enabled en reset absence tracking."""
-        self.vacation_mode_enabled = value
+        """Handmatige "Op vakantie" schakelaar. Presence negeert handmatige instelling."""
+        self._vacation_manual = value
         self._vacation_active = value
         if not value:
             self._absence_start = None
