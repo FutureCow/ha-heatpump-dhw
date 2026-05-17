@@ -6,6 +6,7 @@ PLATFORMS = ["sensor", "switch", "number", "button"]
 # Config keys — hardware sensors
 CONF_BOILER_TEMP_SENSOR = "boiler_temp_sensor"
 CONF_POWER_SENSOR = "power_sensor"
+CONF_ENERGY_METER_SENSOR = "energy_meter_sensor"
 
 # Config keys — hardware controls
 CONF_TARGET_TEMP_ENTITY = "target_temp_entity"
