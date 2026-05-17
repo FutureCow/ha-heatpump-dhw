@@ -87,6 +87,23 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         icon="mdi:currency-eur",
     ),
     DHWSensorDescription(
+        key="yearly_kwh",
+        data_key="yearly_kwh",
+        name="Jaarlijkse energie",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:lightning-bolt",
+    ),
+    DHWSensorDescription(
+        key="yearly_cost",
+        data_key="yearly_cost",
+        name="Jaarlijkse kosten",
+        native_unit_of_measurement=CURRENCY_EURO,
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        icon="mdi:currency-eur",
+    ),
+    DHWSensorDescription(
         key="heat_up_duration_min",
         data_key="heat_up_duration_min",
         name="Opwarmtijd (gemiddeld)",

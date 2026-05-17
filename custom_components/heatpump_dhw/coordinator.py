@@ -124,6 +124,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._monthly_kwh: float = 0.0
         self._monthly_cost: float = 0.0
         self._monthly_month: int = datetime.now().month
+        self._yearly_kwh: float = 0.0
+        self._yearly_cost: float = 0.0
+        self._yearly_year: int = datetime.now().year
 
         # For auto-learning heat loss rate
         self._last_idle_temp: float | None = None
@@ -169,6 +172,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._monthly_kwh = stored.get("monthly_kwh", 0.0)
         self._monthly_cost = stored.get("monthly_cost", 0.0)
         self._monthly_month = stored.get("monthly_month", datetime.now().month)
+        self._yearly_kwh = stored.get("yearly_kwh", 0.0)
+        self._yearly_cost = stored.get("yearly_cost", 0.0)
+        self._yearly_year = stored.get("yearly_year", datetime.now().year)
         self._last_session = stored.get("last_session", {})
 
         opts = self.entry.options
@@ -194,6 +200,9 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "monthly_kwh": self._monthly_kwh,
                 "monthly_cost": self._monthly_cost,
                 "monthly_month": self._monthly_month,
+                "yearly_kwh": self._yearly_kwh,
+                "yearly_cost": self._yearly_cost,
+                "yearly_year": self._yearly_year,
                 "last_session": self._last_session,
             }
         )
@@ -293,6 +302,10 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._monthly_kwh = 0.0
             self._monthly_cost = 0.0
             self._monthly_month = now.month
+        if now.year != self._yearly_year:
+            self._yearly_kwh = 0.0
+            self._yearly_cost = 0.0
+            self._yearly_year = now.year
 
         await self._save_state()
 
@@ -312,6 +325,8 @@ class DHWCoordinator(DataUpdateCoordinator):
             "heat_up_duration_min": round(mean(self._heat_up_samples)) if self._heat_up_samples else None,
             "monthly_kwh": self._monthly_kwh,
             "monthly_cost": self._monthly_cost,
+            "yearly_kwh": self._yearly_kwh,
+            "yearly_cost": self._yearly_cost,
             "learned_loss_rate": round(mean(self._loss_samples), 2) if self._loss_samples else None,
             "learned_heat_rate": round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None,
             "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp, desired_temp),
@@ -916,6 +931,8 @@ class DHWCoordinator(DataUpdateCoordinator):
 
             self._monthly_kwh += sess["running_kwh"]
             self._monthly_cost += sess["running_cost"]
+            self._yearly_kwh += sess["running_kwh"]
+            self._yearly_cost += sess["running_cost"]
 
             cop_str = f", COP {final_cop:.1f}" if final_cop else ""
             outside_str = f" (buiten {outside_temp:.0f}°C)" if outside_temp is not None else ""
