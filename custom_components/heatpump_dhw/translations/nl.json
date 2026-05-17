@@ -60,7 +60,7 @@
           "legionella_temp": "Legionella run temperatuur (°C)",
           "legionella_day": "Dag van legionella run",
           "legionella_hour": "Uur van legionella run",
-          "reference_price_eur": "Referentieprijs voor besparingen (€/kWh)",
+
           "tank_volume_l": "Tankvolume (L, voor COP berekening)",
           "anti_block_days": "Anti-blokkeer: max. dagen zonder run",
           "predictive_heating": "Voorspellend verwarmen (sla prijsmodus over als morgen zon verwacht)"
@@ -99,7 +99,7 @@
           "legionella_temp": "Legionella temperatuur (°C)",
           "legionella_day": "Dag van legionella run",
           "legionella_hour": "Uur van legionella run",
-          "reference_price_eur": "Referentieprijs (€/kWh)",
+
           "tank_volume_l": "Tankvolume (L)",
           "anti_block_days": "Anti-blokkeer interval (dagen)",
           "predictive_heating": "Voorspellend verwarmen"
