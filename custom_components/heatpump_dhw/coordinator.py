@@ -176,6 +176,15 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._yearly_cost = stored.get("yearly_cost", 0.0)
         self._yearly_year = stored.get("yearly_year", datetime.now().year)
         self._last_session = stored.get("last_session", {})
+        # Flush any kWh accumulated before a restart that wasn't counted yet
+        leftover_kwh = self._last_session.get("running_kwh", 0.0)
+        if leftover_kwh > 0.0:
+            self._monthly_kwh += leftover_kwh
+            self._monthly_cost += self._last_session.get("running_cost", 0.0)
+            self._yearly_kwh += leftover_kwh
+            self._yearly_cost += self._last_session.get("running_cost", 0.0)
+            self._last_session["running_kwh"] = 0.0
+            self._last_session["running_cost"] = 0.0
 
         opts = self.entry.options
         self.solar_mode_enabled = opts.get(OPT_SOLAR_MODE_ENABLED, True)
