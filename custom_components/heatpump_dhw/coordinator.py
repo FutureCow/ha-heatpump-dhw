@@ -807,6 +807,16 @@ class DHWCoordinator(DataUpdateCoordinator):
             else:
                 await self._turn_off_heatpump()
                 _LOGGER.info("DHW: stop heating previous_mode=%s", prev_mode)
+                # Flush any accumulated kWh/cost not yet counted (interrupted session)
+                sess = self._last_session
+                leftover_kwh = sess.get("running_kwh", 0.0)
+                if leftover_kwh > 0.0:
+                    self._monthly_kwh += leftover_kwh
+                    self._monthly_cost += sess.get("running_cost", 0.0)
+                    self._yearly_kwh += leftover_kwh
+                    self._yearly_cost += sess.get("running_cost", 0.0)
+                    sess["running_kwh"] = 0.0
+                    sess["running_cost"] = 0.0
                 if prev_mode == MODE_LEGIONELLA:
                     self._last_legionella_run = now
                     await self._notify("Legionella preventie run voltooid.")
