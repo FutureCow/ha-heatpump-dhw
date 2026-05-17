@@ -837,6 +837,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             if should_heat:
                 await self._set_target_temp(desired_temp)
                 await self._turn_on_heatpump()
+                await self._set_eheater(mode == MODE_BOOST, desired_temp)
                 self._session_start = now
                 self._session_start_temp = boiler_temp
                 self._session_start_meter = meter_kwh
@@ -854,8 +855,12 @@ class DHWCoordinator(DataUpdateCoordinator):
                     self._last_pump_run = now
 
         elif should_heat and mode != prev_mode:
-            # Mode changed while heating — update target temp
+            # Mode changed while heating — update target temp and eheater state
             await self._set_target_temp(desired_temp)
+            if mode == MODE_BOOST:
+                await self._set_eheater(True, desired_temp)
+            elif prev_mode == MODE_BOOST:
+                await self._set_eheater(False)
 
         # After boost: restore normal temp
         if prev_mode == MODE_BOOST and mode == MODE_IDLE:
@@ -893,26 +898,34 @@ class DHWCoordinator(DataUpdateCoordinator):
         except Exception as err:
             _LOGGER.warning("DHW: kon doeltemperatuur niet instellen op %s: %s", entity_id, err)
 
-        # Optional separate setpoint entity for the electric heater
-        eheater_setpoint = self.cfg.get(CONF_EHEATER_SETPOINT_ENTITY)
-        if eheater_setpoint and self.cfg.get(CONF_EHEATER_SWITCH):
-            try:
-                await self.hass.services.async_call(
-                    eheater_setpoint.split(".")[0],
-                    "set_value",
-                    {"entity_id": eheater_setpoint, "value": temp},
-                    blocking=True,
-                )
-            except Exception as err:
-                _LOGGER.warning("DHW: kon eheater setpoint niet instellen op %s: %s", eheater_setpoint, err)
+    async def _set_eheater(self, active: bool, temp: float = 0.0) -> None:
+        """Turn the electric heater on or off, and set its setpoint when activating."""
+        sw = self.cfg.get(CONF_EHEATER_SWITCH)
+        if not sw:
+            return
+        service = "turn_on" if active else "turn_off"
+        await self.hass.services.async_call(
+            "homeassistant", service, {"entity_id": sw}, blocking=True
+        )
+        if active:
+            setpoint = self.cfg.get(CONF_EHEATER_SETPOINT_ENTITY)
+            if setpoint:
+                try:
+                    await self.hass.services.async_call(
+                        setpoint.split(".")[0],
+                        "set_value",
+                        {"entity_id": setpoint, "value": temp},
+                        blocking=True,
+                    )
+                except Exception as err:
+                    _LOGGER.warning("DHW: kon eheater setpoint niet instellen op %s: %s", setpoint, err)
 
     async def _turn_on_heatpump(self) -> None:
-        for key in (CONF_HEATPUMP_SWITCH, CONF_EHEATER_SWITCH):
-            sw = self.cfg.get(key)
-            if sw:
-                await self.hass.services.async_call(
-                    "homeassistant", "turn_on", {"entity_id": sw}, blocking=True
-                )
+        sw = self.cfg.get(CONF_HEATPUMP_SWITCH)
+        if sw:
+            await self.hass.services.async_call(
+                "homeassistant", "turn_on", {"entity_id": sw}, blocking=True
+            )
 
     async def _turn_off_heatpump(self) -> None:
         for key in (CONF_HEATPUMP_SWITCH, CONF_EHEATER_SWITCH):
