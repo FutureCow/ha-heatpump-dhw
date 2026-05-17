@@ -67,6 +67,7 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         name="Sessie kosten",
         native_unit_of_measurement=CURRENCY_EURO,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
         icon="mdi:currency-eur",
     ),
     DHWSensorDescription(
@@ -76,6 +77,7 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
         icon="mdi:lightning-bolt",
     ),
     DHWSensorDescription(
@@ -84,6 +86,7 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         name="Maandelijkse kosten",
         native_unit_of_measurement=CURRENCY_EURO,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
         icon="mdi:currency-eur",
     ),
     DHWSensorDescription(
@@ -93,6 +96,7 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
         icon="mdi:lightning-bolt",
     ),
     DHWSensorDescription(
@@ -101,6 +105,7 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         name="Jaarlijkse kosten",
         native_unit_of_measurement=CURRENCY_EURO,
         state_class=SensorStateClass.TOTAL_INCREASING,
+        suggested_display_precision=2,
         icon="mdi:currency-eur",
     ),
     DHWSensorDescription(

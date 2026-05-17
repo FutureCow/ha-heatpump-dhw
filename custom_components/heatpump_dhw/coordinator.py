@@ -357,13 +357,13 @@ class DHWCoordinator(DataUpdateCoordinator):
                 if meter_kwh is not None and self._month_start_meter is not None
                 else round(self._monthly_kwh, 3)
             ),
-            "monthly_cost": self._monthly_cost,
+            "monthly_cost": round(self._monthly_cost, 2),
             "yearly_kwh": (
                 round(meter_kwh - self._year_start_meter, 3)
                 if meter_kwh is not None and self._year_start_meter is not None
                 else round(self._yearly_kwh, 3)
             ),
-            "yearly_cost": self._yearly_cost,
+            "yearly_cost": round(self._yearly_cost, 2),
             "learned_loss_rate": round(mean(self._loss_samples), 2) if self._loss_samples else None,
             "learned_heat_rate": round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None,
             "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp, desired_temp),
