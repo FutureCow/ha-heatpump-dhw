@@ -4,7 +4,6 @@ from __future__ import annotations
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
 from homeassistant.core import callback
-from homeassistant.helpers import selector
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
@@ -23,7 +22,6 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_BOILER_TEMP_SENSOR,
     CONF_DYNAMIC_PRICE_SENSOR,
-    CONF_EHEATER_BOOST_TEMP_ENTITY,
     CONF_EHEATER_SWITCH,
     CONF_HEATPUMP_SWITCH,
     CONF_NOTIFY_SERVICE,
@@ -31,7 +29,6 @@ from .const import (
     CONF_POWER_SENSOR,
     CONF_PRESENCE_SENSOR,
     CONF_PRICE_FORECAST_SENSOR,
-    CONF_PV_PRODUCTION_SENSOR,
     CONF_PV_SURPLUS_SENSOR,
     CONF_SHOWER_SCHEDULES,
     CONF_TARGET_TEMP_ENTITY,
@@ -48,7 +45,6 @@ from .const import (
     DEFAULT_NORMAL_TEMP,
     DEFAULT_PREDICTIVE_HEATING,
     DEFAULT_PRICE_THRESHOLD_EUR,
-    DEFAULT_REFERENCE_PRICE_EUR,
     DEFAULT_SOLAR_THRESHOLD_W,
     DEFAULT_TANK_VOLUME_L,
     DEFAULT_VACATION_ABSENCE_HOURS,
@@ -69,7 +65,6 @@ from .const import (
     OPT_PREDICTIVE_HEATING,
     OPT_PRICE_MODE_ENABLED,
     OPT_PRICE_THRESHOLD_EUR,
-    OPT_REFERENCE_PRICE_EUR,
     OPT_SOLAR_MODE_ENABLED,
     OPT_SOLAR_THRESHOLD_W,
     OPT_TANK_VOLUME_L,
@@ -116,7 +111,6 @@ class DHWConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_TARGET_TEMP_ENTITY): EntitySelector(_NUMBER),
                 vol.Required(CONF_HEATPUMP_SWITCH): EntitySelector(_SWITCH),
                 vol.Optional(CONF_EHEATER_SWITCH): EntitySelector(_SWITCH),
-                vol.Optional(CONF_EHEATER_BOOST_TEMP_ENTITY): EntitySelector(_NUMBER),
             }
         )
         return self.async_show_form(step_id="controls", data_schema=schema)
@@ -129,7 +123,6 @@ class DHWConfigFlow(ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
-                vol.Optional(CONF_PV_PRODUCTION_SENSOR): EntitySelector(_SENSOR),
                 vol.Optional(CONF_PV_SURPLUS_SENSOR): EntitySelector(_SENSOR),
                 vol.Optional(CONF_DYNAMIC_PRICE_SENSOR): EntitySelector(_SENSOR),
                 vol.Optional(CONF_PRICE_FORECAST_SENSOR): EntitySelector(_SENSOR),
@@ -333,9 +326,6 @@ def _defaults_fields(current: dict | None = None, show_legionella_details: bool 
                     NumberSelectorConfig(min=0, max=23, step=1, unit_of_measurement="u", mode=NumberSelectorMode.BOX)
                 ),
             } if show_legionella_details else {}),
-            vol.Optional(OPT_REFERENCE_PRICE_EUR, default=_n(OPT_REFERENCE_PRICE_EUR, DEFAULT_REFERENCE_PRICE_EUR)): NumberSelector(
-                NumberSelectorConfig(min=0, max=2, step=0.01, unit_of_measurement="€/kWh", mode=NumberSelectorMode.BOX)
-            ),
             vol.Optional(OPT_TANK_VOLUME_L, default=_n(OPT_TANK_VOLUME_L, DEFAULT_TANK_VOLUME_L)): NumberSelector(
                 NumberSelectorConfig(min=50, max=500, step=10, unit_of_measurement="L", mode=NumberSelectorMode.BOX)
             ),

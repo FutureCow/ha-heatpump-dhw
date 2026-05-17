@@ -11,10 +11,7 @@ CONF_POWER_SENSOR = "power_sensor"
 CONF_TARGET_TEMP_ENTITY = "target_temp_entity"
 CONF_HEATPUMP_SWITCH = "heatpump_switch"
 CONF_EHEATER_SWITCH = "eheater_switch"
-CONF_EHEATER_BOOST_TEMP_ENTITY = "eheater_boost_temp_entity"
-
 # Config keys — grid/solar sensors
-CONF_PV_PRODUCTION_SENSOR = "pv_production_sensor"
 CONF_PV_SURPLUS_SENSOR = "pv_surplus_sensor"
 CONF_DYNAMIC_PRICE_SENSOR = "dynamic_price_sensor"
 CONF_PRICE_FORECAST_SENSOR = "price_forecast_sensor"
@@ -38,7 +35,6 @@ OPT_VACATION_MIN_TEMP = "vacation_min_temp"
 OPT_LEGIONELLA_TEMP = "legionella_temp"
 OPT_LEGIONELLA_DAY = "legionella_day"  # 0=Mon … 6=Sun
 OPT_LEGIONELLA_HOUR = "legionella_hour"
-OPT_REFERENCE_PRICE_EUR = "reference_price_eur"  # for savings calculation
 OPT_SOLAR_MODE_ENABLED = "solar_mode_enabled"
 OPT_PRICE_MODE_ENABLED = "price_mode_enabled"
 OPT_BOOST_MODE_ENABLED = "boost_mode_enabled"
@@ -61,7 +57,6 @@ DEFAULT_VACATION_MIN_TEMP = 40.0
 DEFAULT_LEGIONELLA_TEMP = 65.0
 DEFAULT_LEGIONELLA_DAY = 6  # Sunday
 DEFAULT_LEGIONELLA_HOUR = 13  # 13:00
-DEFAULT_REFERENCE_PRICE_EUR = 0.25
 DEFAULT_TANK_VOLUME_L = 200.0
 DEFAULT_ANTI_BLOCK_DAYS = 3
 DEFAULT_PREDICTIVE_HEATING = True

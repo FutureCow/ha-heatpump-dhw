@@ -60,7 +60,7 @@
           "legionella_temp": "Legionella run temperature (°C)",
           "legionella_day": "Day of legionella run",
           "legionella_hour": "Hour of legionella run",
-          "reference_price_eur": "Reference price for savings (€/kWh)",
+
           "tank_volume_l": "Tank volume (L, for COP calculation)",
           "anti_block_days": "Anti-block: max. days without a run",
           "predictive_heating": "Predictive heating (skip price mode if sunny tomorrow)"
@@ -99,7 +99,7 @@
           "legionella_temp": "Legionella temperature (°C)",
           "legionella_day": "Day of legionella run",
           "legionella_hour": "Hour of legionella run",
-          "reference_price_eur": "Reference price (€/kWh)",
+
           "tank_volume_l": "Tank volume (L)",
           "anti_block_days": "Anti-block interval (days)",
           "predictive_heating": "Predictive heating"
