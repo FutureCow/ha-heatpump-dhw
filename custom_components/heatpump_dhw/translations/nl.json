@@ -17,7 +17,7 @@
           "target_temp_entity": "Gewenste temperatuur instelling",
           "heatpump_switch": "Warmtepomp aan/uit schakelaar",
           "eheater_switch": "Elektrisch element schakelaar (optioneel)",
-          "eheater_boost_temp_entity": "Boost temperatuur instelling (optioneel)"
+          "eheater_setpoint_entity": "Elektrisch element setpoint entiteit (optioneel — voor boilers die een apart setpoint nodig hebben om het elektrisch element te activeren)"
         }
       },
       "grid": {

@@ -23,6 +23,7 @@ from .const import (
     CONF_BOILER_TEMP_SENSOR,
     CONF_DYNAMIC_PRICE_SENSOR,
     CONF_ENERGY_METER_SENSOR,
+    CONF_EHEATER_SETPOINT_ENTITY,
     CONF_EHEATER_SWITCH,
     CONF_HEATPUMP_SWITCH,
     CONF_NOTIFY_SERVICE,
@@ -113,6 +114,7 @@ class DHWConfigFlow(ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_TARGET_TEMP_ENTITY): EntitySelector(_NUMBER),
                 vol.Required(CONF_HEATPUMP_SWITCH): EntitySelector(_SWITCH),
                 vol.Optional(CONF_EHEATER_SWITCH): EntitySelector(_SWITCH),
+                vol.Optional(CONF_EHEATER_SETPOINT_ENTITY): EntitySelector(_NUMBER),
             }
         )
         return self.async_show_form(step_id="controls", data_schema=schema)
