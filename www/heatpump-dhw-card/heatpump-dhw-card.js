@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.1
+ * Heat Pump DHW Card — v2.2
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -177,9 +177,18 @@ class HeatpumpDhwCard extends HTMLElement {
       }
     }
 
-    return entries
-      .filter(e => !isNaN(e.start) && isFinite(e.price))
-      .sort((a, b) => a.start - b.start);
+    entries = entries.filter(e => !isNaN(e.start) && isFinite(e.price));
+
+    // Auto-scale: electricity prices should be < 2 €/kWh; if median is higher the unit is wrong
+    if (entries.length) {
+      const sorted = entries.slice().sort((a, b) => a.price - b.price);
+      const median = sorted[Math.floor(sorted.length / 2)].price;
+      let scale = 1;
+      while (median / scale > 2) scale *= 10;
+      if (scale > 1) entries = entries.map(e => ({ ...e, price: e.price / scale }));
+    }
+
+    return entries.sort((a, b) => a.start - b.start);
   }
 
   // ── Price chart renderer ──
