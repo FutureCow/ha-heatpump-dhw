@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.2
+ * Heat Pump DHW Card — v2.3
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -363,10 +363,10 @@ class HeatpumpDhwCard extends HTMLElement {
 
     // Temperature progress bar HTML
     const barFill = `<div style="height:100%;width:${tempPct.toFixed(1)}%;background:${tempColor};border-radius:5px;transition:width 0.6s;"></div>`;
-    const targetMarker = (isHeating && targetPct != null)
+    const targetMarker = (targetPct != null)
       ? `<div style="position:absolute;top:50%;left:${targetPct.toFixed(1)}%;transform:translate(-50%,-50%);width:3px;height:18px;background:${modeColor};border-radius:2px;"></div>`
       : "";
-    const barLabels = (isHeating && targetTemp != null)
+    const barLabels = (targetTemp != null)
       ? `<div style="display:flex;justify-content:space-between;font-size:0.7rem;color:var(--secondary-text-color);margin-top:3px;">
            <span>${this._fmt(temp, 1)}°C</span>
            <span style="color:${modeColor};font-weight:600;">→ ${targetTemp.toFixed(0)}°C</span>
