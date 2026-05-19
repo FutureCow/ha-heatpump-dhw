@@ -411,6 +411,30 @@ class DHWCoordinator(DataUpdateCoordinator):
         return dt.astimezone(tz).replace(minute=0, second=0, microsecond=0)
 
     @staticmethod
+    def _to_local_slot(dt: datetime, tz, slot_minutes: int) -> datetime:
+        """Convert a datetime to local timezone and truncate to the nearest slot boundary."""
+        local = dt.astimezone(tz)
+        return local.replace(
+            minute=(local.minute // slot_minutes) * slot_minutes,
+            second=0, microsecond=0,
+        )
+
+    @staticmethod
+    def _detect_slot_minutes(prices: list[tuple[datetime, float]]) -> int:
+        """Detect price resolution (15, 30, or 60 min) from consecutive timestamps."""
+        if len(prices) < 2:
+            return 60
+        intervals = []
+        for i in range(min(6, len(prices) - 1)):
+            delta = int(round((prices[i + 1][0] - prices[i][0]).total_seconds() / 60))
+            if delta > 0:
+                intervals.append(delta)
+        if not intervals:
+            return 60
+        median = sorted(intervals)[len(intervals) // 2]
+        return median if median in (15, 30, 60) else 60
+
+    @staticmethod
     def _parse_iso(s: str) -> datetime:
         """Parse ISO-8601 string; handles Z suffix and naive datetimes."""
         return datetime.fromisoformat(str(s).replace("Z", "+00:00"))
@@ -543,33 +567,59 @@ class DHWCoordinator(DataUpdateCoordinator):
         w = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
         return 168 if w == 0 else w
 
-    def _is_cheap_hour(self, now: datetime, n: int) -> bool:
-        """Return True if current hour is among the cheapest n hours in the price window."""
-        if n == 0:
-            return False
-        prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
-        if not prices:
-            return False
-        cheapest = sorted(prices, key=lambda x: x[1])[:n]
-        current_hour = now.replace(minute=0, second=0, microsecond=0)
-        cheapest_starts = {self._to_local_hour(dt, now.tzinfo) for dt, _ in cheapest}
-        return current_hour in cheapest_starts
+    def _is_cheap_slot(self, now: datetime, n_hours: int) -> bool:
+        """Return True if the current price slot is among the cheapest n_hours worth.
 
-    def _in_cheapest_block(self, now: datetime, n: int) -> bool:
-        """Return True if current time falls within the cheapest n-hour consecutive block."""
-        if n == 0:
+        Works with any slot resolution (15/30/60 min) — auto-detected from forecast data.
+        """
+        if n_hours == 0:
             return False
         prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
         if not prices:
             return False
+        slot_minutes = self._detect_slot_minutes(prices)
+        n_slots = n_hours * (60 // slot_minutes)
+        current_slot = now.replace(
+            minute=(now.minute // slot_minutes) * slot_minutes,
+            second=0, microsecond=0,
+        )
+        # Exclude past sub-slots within the current hour (relevant for <60 min resolution)
+        future = [
+            (t, p) for t, p in prices
+            if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
+        ]
+        if not future:
+            return False
+        cheapest_starts = {
+            self._to_local_slot(dt, now.tzinfo, slot_minutes)
+            for dt, _ in sorted(future, key=lambda x: x[1])[:n_slots]
+        }
+        return current_slot in cheapest_starts
+
+    def _in_cheapest_block(self, now: datetime, n_hours: int) -> bool:
+        """Return True if the current slot falls within the cheapest consecutive block.
+
+        Block length is n_hours; slot resolution is auto-detected from forecast data.
+        """
+        if n_hours == 0:
+            return False
+        prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
+        if not prices:
+            return False
+        slot_minutes = self._detect_slot_minutes(prices)
+        n_slots = n_hours * (60 // slot_minutes)
+        slot_seconds = slot_minutes * 60
+        current_slot = now.replace(
+            minute=(now.minute // slot_minutes) * slot_minutes,
+            second=0, microsecond=0,
+        )
         best_start: datetime | None = None
         best_cost = float("inf")
-        for i in range(len(prices) - n + 1):
-            window = prices[i : i + n]
-            # Verify all hours are truly consecutive
+        for i in range(len(prices) - n_slots + 1):
+            window = prices[i : i + n_slots]
             if any(
-                (window[j + 1][0] - window[j][0]).total_seconds() != 3600
-                for j in range(n - 1)
+                (window[j + 1][0] - window[j][0]).total_seconds() != slot_seconds
+                for j in range(n_slots - 1)
             ):
                 continue
             total = sum(p for _, p in window)
@@ -578,11 +628,10 @@ class DHWCoordinator(DataUpdateCoordinator):
                 best_start = window[0][0]
         if best_start is None:
             return False
-        block_end = best_start + timedelta(hours=n)
-        local_now = now.replace(minute=0, second=0, microsecond=0)
-        local_start = self._to_local_hour(best_start, now.tzinfo)
-        local_end = self._to_local_hour(block_end, now.tzinfo)
-        return local_start <= local_now < local_end
+        block_end = best_start + timedelta(minutes=slot_minutes * n_slots)
+        local_start = best_start.astimezone(now.tzinfo)
+        local_end = block_end.astimezone(now.tzinfo)
+        return local_start <= current_slot < local_end
 
     # ------------------------------------------------------------------
     # Mode decision — priority order
@@ -676,7 +725,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                         return MODE_PRICE, normal_temp
                 else:
                     # Non-consecutive: heat during each of the cheapest n hours individually
-                    use_forecast = n > 0 and self._is_cheap_hour(now, n)
+                    use_forecast = n > 0 and self._is_cheap_slot(now, n)
                     use_threshold = (
                         not use_forecast
                         and price_eur is not None
@@ -853,22 +902,25 @@ class DHWCoordinator(DataUpdateCoordinator):
                         candidates.append(start_dt)
                 break  # only first occurrence per schedule
 
-        # Also consider next cheap price hour (if price mode enabled and boiler needs heating)
+        # Also consider next cheap price slot (if price mode enabled and boiler needs heating)
         if self.price_mode_enabled:
             boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
             n = self._price_mode_n or self._needed_cheap_hours(boiler_temp, normal_temp)
             consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
             if n > 0:
                 prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
+                slot_minutes = self._detect_slot_minutes(prices) if len(prices) >= 2 else 60
+                n_slots = n * (60 // slot_minutes)
+                slot_seconds = slot_minutes * 60
                 if consecutive:
                     # Find start of cheapest consecutive block
                     best_start: datetime | None = None
                     best_cost = float("inf")
-                    for i in range(len(prices) - n + 1):
-                        window = prices[i : i + n]
+                    for i in range(len(prices) - n_slots + 1):
+                        window = prices[i : i + n_slots]
                         if any(
-                            (window[j + 1][0] - window[j][0]).total_seconds() != 3600
-                            for j in range(n - 1)
+                            (window[j + 1][0] - window[j][0]).total_seconds() != slot_seconds
+                            for j in range(n_slots - 1)
                         ):
                             continue
                         total = sum(p for _, p in window)
@@ -876,16 +928,16 @@ class DHWCoordinator(DataUpdateCoordinator):
                             best_cost = total
                             best_start = window[0][0]
                     if best_start is not None:
-                        slot_hour = self._to_local_hour(best_start, now.tzinfo)
-                        if slot_hour > now:
-                            candidates.append(slot_hour)
+                        slot_start = self._to_local_slot(best_start, now.tzinfo, slot_minutes)
+                        if slot_start > now:
+                            candidates.append(slot_start)
                 else:
-                    # First upcoming hour from cheapest-n individual hours
-                    cheapest = sorted(prices, key=lambda x: x[1])[:n]
+                    # First upcoming slot from cheapest-n_slots individual slots
+                    cheapest = sorted(prices, key=lambda x: x[1])[:n_slots]
                     for slot_t, _ in sorted(cheapest, key=lambda x: x[0]):
-                        slot_hour = self._to_local_hour(slot_t, now.tzinfo)
-                        if slot_hour > now:
-                            candidates.append(slot_hour)
+                        slot_start = self._to_local_slot(slot_t, now.tzinfo, slot_minutes)
+                        if slot_start > now:
+                            candidates.append(slot_start)
                             break
 
         return min(candidates) if candidates else None
