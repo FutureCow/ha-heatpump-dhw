@@ -173,6 +173,7 @@ price_switch: switch.dhw_price_mode
 boost_switch: switch.dhw_boost_mode
 vacation_switch: switch.dhw_vacation_mode
 legionella_switch: switch.dhw_legionella_mode
+heat_now_button: button.heat_pump_dhw_airwell_zet_aan  # optioneel, directe verwarmingsknop
 ```
 
 ### Configuratie-opties
@@ -195,6 +196,7 @@ legionella_switch: switch.dhw_legionella_mode
 | `boost_switch` | — | Schakelaar boost modus |
 | `vacation_switch` | — | Schakelaar vakantie modus |
 | `legionella_switch` | — | Schakelaar legionella preventie |
+| `heat_now_button` | — | `button` entiteit om direct te starten met verwarmen |
 
 ### Prijsgrafiek
 
