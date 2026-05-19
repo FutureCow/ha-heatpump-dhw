@@ -626,6 +626,12 @@ class DHWCoordinator(DataUpdateCoordinator):
             and not skip_predictive
             and (boiler_temp is None or boiler_temp < normal_temp - TEMP_HYSTERESIS)
         ):
+            # If already heating in price mode, continue until target is reached —
+            # don't recalculate cheap hours mid-session (boiler temp rise shrinks n,
+            # which can exclude the next planned hour from the cheapest-n set)
+            if self._heating and self._active_mode == MODE_PRICE:
+                return MODE_PRICE, normal_temp
+
             price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
             use_forecast = self._is_cheap_hour(now, boiler_temp)
             use_threshold = not use_forecast and price_eur is not None and price_eur <= price_threshold
