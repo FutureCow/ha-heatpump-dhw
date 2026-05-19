@@ -64,7 +64,8 @@
 
           "tank_volume_l": "Tankvolume (L, voor COP berekening)",
           "anti_block_days": "Anti-blokkeer: max. dagen zonder run",
-          "predictive_heating": "Voorspellend verwarmen (sla prijsmodus over als morgen zon verwacht)"
+          "predictive_heating": "Voorspellend verwarmen (sla prijsmodus over als morgen zon verwacht)",
+          "price_mode_consecutive": "Prijsmodus: verwarmen in goedkoopste aaneengesloten blok (in plaats van goedkoopste losse uren)"
         }
       }
     }
@@ -104,7 +105,8 @@
 
           "tank_volume_l": "Tankvolume (L)",
           "anti_block_days": "Anti-blokkeer interval (dagen)",
-          "predictive_heating": "Voorspellend verwarmen"
+          "predictive_heating": "Voorspellend verwarmen",
+          "price_mode_consecutive": "Prijsmodus: goedkoopste aaneengesloten blok"
         }
       },
       "shower_schedules": {
