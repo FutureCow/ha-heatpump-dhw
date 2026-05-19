@@ -34,6 +34,7 @@ from .const import (
     DEFAULT_ANTI_BLOCK_DAYS,
     DEFAULT_BOOST_TEMP,
     DEFAULT_CHEAP_HOURS,
+    DEFAULT_BOILER_SETPOINT_OFFSET,
     DEFAULT_PRICE_MODE_CONSECUTIVE,
     DEFAULT_PRICE_WINDOW_HOURS,
     DEFAULT_TANK_LOSS_RATE,
@@ -50,6 +51,7 @@ from .const import (
     DEFAULT_VACATION_ABSENCE_HOURS,
     DEFAULT_VACATION_MIN_TEMP,
     OPT_CHEAP_HOURS,
+    OPT_BOILER_SETPOINT_OFFSET,
     OPT_PRICE_MODE_CONSECUTIVE,
     OPT_PRICE_WINDOW_HOURS,
     OPT_TANK_LOSS_RATE,
@@ -230,6 +232,15 @@ class DHWCoordinator(DataUpdateCoordinator):
         if key in self.entry.options:
             return self.entry.options[key]
         return self.entry.data.get(key, default)
+
+    def _effective_hysteresis(self) -> float:
+        """Dead band for heating decisions: max of built-in hysteresis and boiler setpoint offset.
+
+        Some boilers won't activate unless temp is at least N °C below setpoint.
+        Setting boiler_setpoint_offset to that value prevents futile on-commands.
+        """
+        offset = float(self._opt(OPT_BOILER_SETPOINT_OFFSET, DEFAULT_BOILER_SETPOINT_OFFSET))
+        return max(TEMP_HYSTERESIS, offset)
 
     @property
     def cfg(self):
@@ -553,7 +564,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
     def _needed_cheap_hours(self, boiler_temp: float | None, target_temp: float) -> int:
         """Calculate how many cheap hours are needed based on learned heating rate."""
-        if boiler_temp is None or boiler_temp >= target_temp - TEMP_HYSTERESIS:
+        if boiler_temp is None or boiler_temp >= target_temp - self._effective_hysteresis():
             return 0
         if self._heat_rate_samples:
             rate = mean(self._heat_rate_samples)  # °C/hour
@@ -673,7 +684,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         # 2. Legionella — weekly safety run
         if self.legionella_mode_enabled and self._is_legionella_time(now):
             leg_temp = self._opt(OPT_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)
-            if boiler_temp is None or boiler_temp < leg_temp - TEMP_HYSTERESIS:
+            if boiler_temp is None or boiler_temp < leg_temp - self._effective_hysteresis():
                 return MODE_LEGIONELLA, leg_temp
 
         # 3. Boost — very large solar surplus
@@ -683,7 +694,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             self.boost_mode_enabled
             and surplus_w is not None
             and surplus_w >= boost_threshold
-            and (boiler_temp is None or boiler_temp < boost_temp - TEMP_HYSTERESIS)
+            and (boiler_temp is None or boiler_temp < boost_temp - self._effective_hysteresis())
         ):
             return MODE_BOOST, boost_temp
 
@@ -693,7 +704,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             self.solar_mode_enabled
             and surplus_w is not None
             and surplus_w >= solar_threshold
-            and (boiler_temp is None or boiler_temp < normal_temp - TEMP_HYSTERESIS)
+            and (boiler_temp is None or boiler_temp < normal_temp - self._effective_hysteresis())
         ):
             return MODE_SOLAR, normal_temp
 
@@ -701,7 +712,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
         skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
         if self.price_mode_enabled and not skip_predictive:
-            at_target = boiler_temp is not None and boiler_temp >= normal_temp - TEMP_HYSTERESIS
+            at_target = boiler_temp is not None and boiler_temp >= normal_temp - self._effective_hysteresis()
             if at_target:
                 # Boiler at target — reset planning so n is recalculated when it cools
                 self._price_mode_n = 0
@@ -764,7 +775,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         # 8. Vacation — hold minimum temperature
         if self._vacation_active:
             min_temp = self._opt(OPT_VACATION_MIN_TEMP, DEFAULT_VACATION_MIN_TEMP)
-            if boiler_temp is None or boiler_temp < min_temp - TEMP_HYSTERESIS:
+            if boiler_temp is None or boiler_temp < min_temp - self._effective_hysteresis():
                 return MODE_VACATION, min_temp
 
         return MODE_IDLE, normal_temp
@@ -860,13 +871,13 @@ class DHWCoordinator(DataUpdateCoordinator):
                     current_hour = now.replace(minute=0, second=0, microsecond=0)
                     slot_hour = self._to_local_hour(optimal_t, now.tzinfo)
                     if current_hour == slot_hour:
-                        if boiler_temp is None or boiler_temp < target_temp - TEMP_HYSTERESIS:
+                        if boiler_temp is None or boiler_temp < target_temp - self._effective_hysteresis():
                             return True, target_temp
                 else:
                     # No forecast — fall back to fixed window
                     start_at = shower_dt - timedelta(minutes=heat_up_min + 10)
                     if start_at <= now <= shower_dt:
-                        if boiler_temp is None or boiler_temp < required_temp - TEMP_HYSTERESIS:
+                        if boiler_temp is None or boiler_temp < required_temp - self._effective_hysteresis():
                             return True, required_temp
 
         return False, None

@@ -36,6 +36,7 @@ from .const import (
     CONF_TARGET_TEMP_ENTITY,
     CONF_WEATHER_ENTITY,
     DEFAULT_ANTI_BLOCK_DAYS,
+    DEFAULT_BOILER_SETPOINT_OFFSET,
     DEFAULT_BOOST_TEMP,
     DEFAULT_CHEAP_HOURS,
     DEFAULT_PRICE_MODE_CONSECUTIVE,
@@ -54,6 +55,7 @@ from .const import (
     DEFAULT_VACATION_MIN_TEMP,
     DOMAIN,
     OPT_ANTI_BLOCK_DAYS,
+    OPT_BOILER_SETPOINT_OFFSET,
     OPT_BOOST_MODE_ENABLED,
     OPT_BOOST_TEMP,
     OPT_BOOST_THRESHOLD_W,
@@ -344,6 +346,9 @@ def _defaults_fields(current: dict | None = None, show_legionella_details: bool 
                 NumberSelectorConfig(min=1, max=14, step=1, unit_of_measurement="dagen", mode=NumberSelectorMode.BOX)
             ),
             vol.Optional(OPT_PREDICTIVE_HEATING, default=_n(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)): BooleanSelector(),
+            vol.Optional(OPT_BOILER_SETPOINT_OFFSET, default=_n(OPT_BOILER_SETPOINT_OFFSET, DEFAULT_BOILER_SETPOINT_OFFSET)): NumberSelector(
+                NumberSelectorConfig(min=0, max=15, step=0.5, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
+            ),
         }
 
 
