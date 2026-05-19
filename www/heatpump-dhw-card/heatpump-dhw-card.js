@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.4
+ * Heat Pump DHW Card — v2.5
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -274,7 +274,7 @@ class HeatpumpDhwCard extends HTMLElement {
         : "";
 
       const colStyle = isCheap
-        ? `background:rgba(34,197,94,0.18);border-radius:5px;box-shadow:0 0 0 2px #22c55e;`
+        ? `background:rgba(255,255,255,0.45);border-radius:4px;`
         : "";
 
       return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;${colStyle}">
