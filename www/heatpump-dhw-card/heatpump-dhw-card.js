@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.5
+ * Heat Pump DHW Card — v2.6
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -219,8 +219,8 @@ class HeatpumpDhwCard extends HTMLElement {
     const maxP = Math.max(...prices);
     const range = maxP - minP || 0.001;
 
-    // Mark cheapest N slots
-    const n = Math.max(1, cheapHours || 2);
+    // Mark cheapest N slots (convert hours → slots based on resolution)
+    const n = Math.max(1, Math.round((cheapHours || 2) * (60 / slotMin)));
     const cheapSlots = new Set(
       [...bars]
         .sort((a, b) => a.price - b.price)
