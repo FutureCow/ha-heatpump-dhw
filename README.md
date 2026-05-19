@@ -119,17 +119,31 @@ Na installatie zijn alle instellingen aanpasbaar via **Instellingen → Integrat
 
 ## Dashboard card
 
-Voeg de Lovelace card toe als resource:
+De integratie bevat een kant-en-klare Lovelace card met:
 
+- 🔥 **Verwarmingsindicator** — pulserende vlam als er actief verwarmd wordt, druppel bij standby
+- 🌡️ **Temperatuurbalk** — huidige boilertemperatuur met een gekleurde marker voor de doeltemperatuur
+- 📊 **Prijsgrafiek** — de komende 24 uur als gekleurde staven (groen = goedkoop, rood = duur), met markering voor geplande verwarmingsblokken en het volgende verwarmingsmoment
+- ⚡ **Sessiestatistieken** — kWh verbruik, kosten en huidig vermogen
+- 🔘 **Modusschakelaars** — directe bediening van alle modi
+
+### Installatie
+
+**Stap 1 — JavaScript resource toevoegen**
+
+Via de UI: **Instellingen → Dashboards → Drie-puntjes (⋮) → Resources → Toevoegen**
+
+Of in `configuration.yaml`:
 ```yaml
-# configuration.yaml of via UI
 lovelace:
   resources:
     - url: /local/heatpump-dhw-card/heatpump-dhw-card.js
       type: module
 ```
 
-Gebruik in Lovelace:
+Herstart Home Assistant na het toevoegen.
+
+**Stap 2 — Card toevoegen aan je dashboard**
 
 ```yaml
 type: custom:heatpump-dhw-card
@@ -137,20 +151,54 @@ title: Warmtepomp Boiler
 temp_sensor: sensor.dhw_boiler_temp
 mode_sensor: sensor.dhw_active_mode
 status_sensor: sensor.dhw_status_text
-power_sensor: sensor.dhw_power_w
+power_sensor: sensor.dhw_power_w              # optioneel
 session_kwh_sensor: sensor.dhw_session_kwh
 session_cost_sensor: sensor.dhw_session_cost
-session_savings_sensor: sensor.dhw_session_savings
-monthly_savings_sensor: sensor.dhw_monthly_savings
 next_heating_sensor: sensor.dhw_next_heating
-heat_up_sensor: sensor.dhw_heat_up_duration_min
+heat_up_sensor: sensor.dhw_heat_up_duration_min  # optioneel
+price_forecast_sensor: sensor.zonneplan_current_electricity_tariff  # voor prijsgrafiek
+target_temp_sensor: number.boiler_setpoint    # optioneel, doeltemperatuur in grafiek
+cheap_hours: 2                                # optioneel, goedkoopste N blokken markeren
 solar_switch: switch.dhw_solar_mode
 price_switch: switch.dhw_price_mode
 boost_switch: switch.dhw_boost_mode
 vacation_switch: switch.dhw_vacation_mode
-on_vacation_switch: switch.dhw_on_vacation
 legionella_switch: switch.dhw_legionella_mode
 ```
+
+### Configuratie-opties
+
+| Optie | Vereist | Beschrijving |
+|-------|---------|-------------|
+| `temp_sensor` | ✅ | Boiler watertemperatuur sensor |
+| `mode_sensor` | ✅ | Actieve modus sensor (`sensor.dhw_active_mode`) |
+| `status_sensor` | aanbevolen | Status tekst sensor |
+| `power_sensor` | — | Huidig vermogen in W |
+| `session_kwh_sensor` | — | kWh verbruik huidige sessie |
+| `session_cost_sensor` | — | Kosten huidige sessie |
+| `next_heating_sensor` | aanbevolen | Timestamp volgende geplande verwarming |
+| `heat_up_sensor` | — | Gemiddelde opwarmtijd in minuten |
+| `price_forecast_sensor` | — | Prijsvoorspelling sensor (zelfde als in integratie-configuratie) — activeert de prijsgrafiek |
+| `target_temp_sensor` | — | Setpoint-entiteit van de boiler; als niet opgegeven wordt de doeltemperatuur uit de statustekst gehaald |
+| `cheap_hours` | — | Hoeveel goedkoopste blokken in de grafiek te markeren (standaard `2`) |
+| `solar_switch` | — | Schakelaar zonne-energiemodus |
+| `price_switch` | — | Schakelaar prijsmodus |
+| `boost_switch` | — | Schakelaar boost modus |
+| `vacation_switch` | — | Schakelaar vakantie modus |
+| `legionella_switch` | — | Schakelaar legionella preventie |
+
+### Prijsgrafiek
+
+De grafiek toont de komende uren op basis van de `price_forecast_sensor`. De slot-grootte (15/30/60 min) wordt automatisch herkend.
+
+| Element | Betekenis |
+|---------|-----------|
+| Groene staaf | Goedkoop uur/kwartier |
+| Rode staaf | Duur uur/kwartier |
+| **▼** groen driehoekje | Goedkoopste N slots — hier plant de integratie de verwarming |
+| Oranje ring | Huidig slot, boiler is actief aan het verwarmen |
+| Grijze ring | Huidig slot, boiler staat op standby |
+| 🔥 vlammetje | Volgende geplande verwarmingsmoment |
 
 ## Douche schema instellen
 
