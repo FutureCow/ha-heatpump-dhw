@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.0
+ * Heat Pump DHW Card — v2.1
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -103,6 +103,11 @@ class HeatpumpDhwCard extends HTMLElement {
     if (!id || !this._hass) return;
     const svc = this._state(id) === "on" ? "turn_off" : "turn_on";
     await this._hass.callService("switch", svc, { entity_id: id });
+  }
+
+  async _pressButton(id) {
+    if (!id || !this._hass) return;
+    await this._hass.callService("button", "press", { entity_id: id });
   }
 
   // ── Price forecast parser (handles Zonneplan, Nordpool, Tibber, generic) ──
@@ -258,7 +263,7 @@ class HeatpumpDhwCard extends HTMLElement {
       const outline = isCur
         ? `box-shadow:0 0 0 2px #fff,0 0 0 3.5px ${isHeating ? "#f97316" : "#9ca3af"};`
         : isCheap
-          ? `box-shadow:0 0 0 1.5px #22c55e40;`
+          ? `box-shadow:0 0 0 2px #22c55e;`
           : "";
 
       return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;">
@@ -387,6 +392,8 @@ class HeatpumpDhwCard extends HTMLElement {
         .sw-on  { background:var(--primary-color,#3b82f6); color:#fff; }
         .sw-off { background:var(--secondary-background-color,#e5e7eb); color:var(--secondary-text-color); }
         .sw-btn:hover { opacity:0.8; }
+        .heat-now-btn { border:none; border-radius:8px; padding:8px 16px; font-size:0.84rem; font-weight:600; cursor:pointer; font-family:inherit; background:#f97316; color:#fff; transition:opacity 0.15s; width:100%; margin-bottom:8px; }
+        .heat-now-btn:hover { opacity:0.85; }
       </style>
 
       <div class="dhw-header">
@@ -422,12 +429,15 @@ class HeatpumpDhwCard extends HTMLElement {
       ${nextRel ? `<div class="dhw-next">🚿 Volgende verwarming: <strong>${nextRel}</strong>${heatUp && heatUp !== "unknown" ? ` &nbsp;(~${this._fmt(heatUp, 0)} min)` : ""}</div>` : ""}
 
       <hr class="dhw-divider">
+      ${c.heat_now_button ? `<button class="heat-now-btn" id="heat-now-btn">🔥 Nu verwarmen</button>` : ""}
       <div class="dhw-switches">${switchHtml}</div>
     </ha-card>`;
 
     this.querySelectorAll(".sw-btn").forEach(btn =>
       btn.addEventListener("click", () => this._toggleSwitch(btn.dataset.entity))
     );
+    const hnBtn = this.querySelector("#heat-now-btn");
+    if (hnBtn) hnBtn.addEventListener("click", () => this._pressButton(c.heat_now_button));
   }
 
   static getStubConfig() {
@@ -450,6 +460,7 @@ class HeatpumpDhwCard extends HTMLElement {
       boost_switch: "switch.dhw_boost_mode",
       vacation_switch: "switch.dhw_vacation_mode",
       legionella_switch: "switch.dhw_legionella_mode",
+      heat_now_button: "",
     };
   }
 }
