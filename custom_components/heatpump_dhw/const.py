@@ -48,6 +48,7 @@ OPT_VACATION_ABSENCE_HOURS = "vacation_absence_hours"
 OPT_CHEAP_HOURS = "cheap_hours"
 OPT_PRICE_WINDOW_HOURS = "price_window_hours"
 OPT_TANK_LOSS_RATE = "tank_loss_rate"
+OPT_PRICE_MODE_CONSECUTIVE = "price_mode_consecutive"
 
 # Default option values
 DEFAULT_SOLAR_THRESHOLD_W = 500
@@ -66,6 +67,7 @@ DEFAULT_VACATION_ABSENCE_HOURS = 24
 DEFAULT_CHEAP_HOURS = 2
 DEFAULT_PRICE_WINDOW_HOURS = 24
 DEFAULT_TANK_LOSS_RATE = 0.5
+DEFAULT_PRICE_MODE_CONSECUTIVE = False
 
 # Heating modes
 MODE_IDLE = "idle"

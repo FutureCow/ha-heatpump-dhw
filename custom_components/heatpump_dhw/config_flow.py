@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_ANTI_BLOCK_DAYS,
     DEFAULT_BOOST_TEMP,
     DEFAULT_CHEAP_HOURS,
+    DEFAULT_PRICE_MODE_CONSECUTIVE,
     DEFAULT_PRICE_WINDOW_HOURS,
     DEFAULT_TANK_LOSS_RATE,
     DEFAULT_BOOST_THRESHOLD_W,
@@ -62,6 +63,7 @@ from .const import (
     OPT_LEGIONELLA_TEMP,
     OPT_NORMAL_TEMP,
     OPT_CHEAP_HOURS,
+    OPT_PRICE_MODE_CONSECUTIVE,
     OPT_PRICE_WINDOW_HOURS,
     OPT_TANK_LOSS_RATE,
     OPT_PREDICTIVE_HEATING,
@@ -296,6 +298,7 @@ def _defaults_fields(current: dict | None = None, show_legionella_details: bool 
             vol.Optional(OPT_PRICE_WINDOW_HOURS, default=_n(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS)): NumberSelector(
                 NumberSelectorConfig(min=0, max=48, step=1, unit_of_measurement="uur", mode=NumberSelectorMode.BOX)
             ),
+            vol.Optional(OPT_PRICE_MODE_CONSECUTIVE, default=_n(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)): BooleanSelector(),
             vol.Optional(OPT_TANK_LOSS_RATE, default=_n(OPT_TANK_LOSS_RATE, DEFAULT_TANK_LOSS_RATE)): NumberSelector(
                 NumberSelectorConfig(min=0.1, max=2.0, step=0.1, unit_of_measurement="°C/uur", mode=NumberSelectorMode.BOX)
             ),

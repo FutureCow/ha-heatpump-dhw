@@ -34,6 +34,7 @@ from .const import (
     DEFAULT_ANTI_BLOCK_DAYS,
     DEFAULT_BOOST_TEMP,
     DEFAULT_CHEAP_HOURS,
+    DEFAULT_PRICE_MODE_CONSECUTIVE,
     DEFAULT_PRICE_WINDOW_HOURS,
     DEFAULT_TANK_LOSS_RATE,
     DEFAULT_BOOST_THRESHOLD_W,
@@ -49,6 +50,7 @@ from .const import (
     DEFAULT_VACATION_ABSENCE_HOURS,
     DEFAULT_VACATION_MIN_TEMP,
     OPT_CHEAP_HOURS,
+    OPT_PRICE_MODE_CONSECUTIVE,
     OPT_PRICE_WINDOW_HOURS,
     OPT_TANK_LOSS_RATE,
     DOMAIN,
@@ -148,6 +150,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         self.vacation_mode_enabled: bool = False
 
         self._manual_heat: bool = False
+        self._price_mode_n: int = 0  # cheap-hour count fixed at start of planning cycle
 
         # Absence tracking for delayed vacation mode
         self._absence_start: datetime | None = None
@@ -540,10 +543,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         w = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
         return 168 if w == 0 else w
 
-    def _is_cheap_hour(self, now: datetime, boiler_temp: float | None) -> bool:
-        """Return True if current hour is among the cheapest N hours in the price window."""
-        normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
-        n = self._needed_cheap_hours(boiler_temp, normal_temp)
+    def _is_cheap_hour(self, now: datetime, n: int) -> bool:
+        """Return True if current hour is among the cheapest n hours in the price window."""
         if n == 0:
             return False
         prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
@@ -553,6 +554,35 @@ class DHWCoordinator(DataUpdateCoordinator):
         current_hour = now.replace(minute=0, second=0, microsecond=0)
         cheapest_starts = {self._to_local_hour(dt, now.tzinfo) for dt, _ in cheapest}
         return current_hour in cheapest_starts
+
+    def _in_cheapest_block(self, now: datetime, n: int) -> bool:
+        """Return True if current time falls within the cheapest n-hour consecutive block."""
+        if n == 0:
+            return False
+        prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
+        if not prices:
+            return False
+        best_start: datetime | None = None
+        best_cost = float("inf")
+        for i in range(len(prices) - n + 1):
+            window = prices[i : i + n]
+            # Verify all hours are truly consecutive
+            if any(
+                (window[j + 1][0] - window[j][0]).total_seconds() != 3600
+                for j in range(n - 1)
+            ):
+                continue
+            total = sum(p for _, p in window)
+            if total < best_cost:
+                best_cost = total
+                best_start = window[0][0]
+        if best_start is None:
+            return False
+        block_end = best_start + timedelta(hours=n)
+        local_now = now.replace(minute=0, second=0, microsecond=0)
+        local_start = self._to_local_hour(best_start, now.tzinfo)
+        local_end = self._to_local_hour(block_end, now.tzinfo)
+        return local_start <= local_now < local_end
 
     # ------------------------------------------------------------------
     # Mode decision — priority order
@@ -621,22 +651,39 @@ class DHWCoordinator(DataUpdateCoordinator):
         # 5. Dynamic price — use cheapest-hours forecast when available, else threshold
         predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
         skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
-        if (
-            self.price_mode_enabled
-            and not skip_predictive
-            and (boiler_temp is None or boiler_temp < normal_temp - TEMP_HYSTERESIS)
-        ):
-            # If already heating in price mode, continue until target is reached —
-            # don't recalculate cheap hours mid-session (boiler temp rise shrinks n,
-            # which can exclude the next planned hour from the cheapest-n set)
-            if self._heating and self._active_mode == MODE_PRICE:
-                return MODE_PRICE, normal_temp
+        if self.price_mode_enabled and not skip_predictive:
+            at_target = boiler_temp is not None and boiler_temp >= normal_temp - TEMP_HYSTERESIS
+            if at_target:
+                # Boiler at target — reset planning so n is recalculated when it cools
+                self._price_mode_n = 0
+            else:
+                # Fix n at start of planning cycle so rising boiler temp doesn't shrink
+                # the cheap-hour selection mid-session
+                if self._price_mode_n == 0:
+                    self._price_mode_n = self._needed_cheap_hours(boiler_temp, normal_temp)
+                n = self._price_mode_n
+                price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
+                consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
 
-            price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
-            use_forecast = self._is_cheap_hour(now, boiler_temp)
-            use_threshold = not use_forecast and price_eur is not None and price_eur <= price_threshold
-            if use_forecast or use_threshold:
-                return MODE_PRICE, normal_temp
+                if consecutive:
+                    # Consecutive block: find cheapest n-hour window, heat continuously
+                    if self._heating and self._active_mode == MODE_PRICE:
+                        return MODE_PRICE, normal_temp
+                    if n > 0 and self._in_cheapest_block(now, n):
+                        return MODE_PRICE, normal_temp
+                    # Threshold fallback when no forecast available
+                    if price_eur is not None and price_eur <= price_threshold:
+                        return MODE_PRICE, normal_temp
+                else:
+                    # Non-consecutive: heat during each of the cheapest n hours individually
+                    use_forecast = n > 0 and self._is_cheap_hour(now, n)
+                    use_threshold = (
+                        not use_forecast
+                        and price_eur is not None
+                        and price_eur <= price_threshold
+                    )
+                    if use_forecast or use_threshold:
+                        return MODE_PRICE, normal_temp
 
         # 6. Vacation status — determined early so shower schedule can be skipped
         # Auto-detectie: alleen als "Vakantie modus" feature aan staat én niet handmatig ingesteld
@@ -809,15 +856,37 @@ class DHWCoordinator(DataUpdateCoordinator):
         # Also consider next cheap price hour (if price mode enabled and boiler needs heating)
         if self.price_mode_enabled:
             boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
-            n = self._needed_cheap_hours(boiler_temp, normal_temp)
+            n = self._price_mode_n or self._needed_cheap_hours(boiler_temp, normal_temp)
+            consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
             if n > 0:
                 prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
-                cheapest = sorted(prices, key=lambda x: x[1])[:n]
-                for slot_t, _ in cheapest:
-                    slot_hour = self._to_local_hour(slot_t, now.tzinfo)
-                    if slot_hour > now:
-                        candidates.append(slot_hour)
-                        break
+                if consecutive:
+                    # Find start of cheapest consecutive block
+                    best_start: datetime | None = None
+                    best_cost = float("inf")
+                    for i in range(len(prices) - n + 1):
+                        window = prices[i : i + n]
+                        if any(
+                            (window[j + 1][0] - window[j][0]).total_seconds() != 3600
+                            for j in range(n - 1)
+                        ):
+                            continue
+                        total = sum(p for _, p in window)
+                        if total < best_cost:
+                            best_cost = total
+                            best_start = window[0][0]
+                    if best_start is not None:
+                        slot_hour = self._to_local_hour(best_start, now.tzinfo)
+                        if slot_hour > now:
+                            candidates.append(slot_hour)
+                else:
+                    # First upcoming hour from cheapest-n individual hours
+                    cheapest = sorted(prices, key=lambda x: x[1])[:n]
+                    for slot_t, _ in sorted(cheapest, key=lambda x: x[0]):
+                        slot_hour = self._to_local_hour(slot_t, now.tzinfo)
+                        if slot_hour > now:
+                            candidates.append(slot_hour)
+                            break
 
         return min(candidates) if candidates else None
 

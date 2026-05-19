@@ -64,7 +64,8 @@
 
           "tank_volume_l": "Tank volume (L, for COP calculation)",
           "anti_block_days": "Anti-block: max. days without a run",
-          "predictive_heating": "Predictive heating (skip price mode if sunny tomorrow)"
+          "predictive_heating": "Predictive heating (skip price mode if sunny tomorrow)",
+          "price_mode_consecutive": "Price mode: heat in cheapest consecutive block (instead of cheapest individual hours)"
         }
       }
     }
@@ -104,7 +105,8 @@
 
           "tank_volume_l": "Tank volume (L)",
           "anti_block_days": "Anti-block interval (days)",
-          "predictive_heating": "Predictive heating"
+          "predictive_heating": "Predictive heating",
+          "price_mode_consecutive": "Price mode: cheapest consecutive block"
         }
       },
       "shower_schedules": {
