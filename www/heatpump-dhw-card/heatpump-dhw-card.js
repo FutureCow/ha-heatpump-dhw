@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.3
+ * Heat Pump DHW Card — v2.4
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -269,16 +269,18 @@ class HeatpumpDhwCard extends HTMLElement {
       else if (isNhSlot && !isCur)  marker = `<span style="font-size:11px;">🔥</span>`;
       else if (isCheap)             marker = `<span style="font-size:9px;color:#22c55e;font-weight:700;">▼</span>`;
 
-      const outline = isCur
+      const barOutline = isCur
         ? `box-shadow:0 0 0 2px #fff,0 0 0 3.5px ${isHeating ? "#f97316" : "#9ca3af"};`
-        : isCheap
-          ? `box-shadow:0 0 0 2px #22c55e;`
-          : "";
+        : "";
 
-      return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;">
+      const colStyle = isCheap
+        ? `background:rgba(34,197,94,0.18);border-radius:5px;box-shadow:0 0 0 2px #22c55e;`
+        : "";
+
+      return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;${colStyle}">
         <div style="height:16px;display:flex;align-items:center;justify-content:center;">${marker}</div>
         <div style="flex:1;display:flex;align-items:flex-end;width:100%;padding:0 1px;">
-          <div style="width:100%;height:${heightPct}%;background:${color};border-radius:2px 2px 0 0;${outline}"></div>
+          <div style="width:100%;height:${heightPct}%;background:${color};border-radius:2px 2px 0 0;${barOutline}"></div>
         </div>
         <div style="font-size:8.5px;color:var(--secondary-text-color);text-align:center;margin-top:2px;overflow:hidden;white-space:nowrap;width:100%;">${label}</div>
       </div>`;
