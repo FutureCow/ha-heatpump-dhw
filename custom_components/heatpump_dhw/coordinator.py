@@ -912,8 +912,13 @@ class DHWCoordinator(DataUpdateCoordinator):
                 slot_minutes = self._detect_slot_minutes(prices) if len(prices) >= 2 else 60
                 n_slots = n * (60 // slot_minutes)
                 slot_seconds = slot_minutes * 60
+                # Current slot boundary (e.g. 10:30 when it's 10:33 with 15-min slots)
+                current_slot = now.replace(
+                    minute=(now.minute // slot_minutes) * slot_minutes,
+                    second=0, microsecond=0,
+                )
                 if consecutive:
-                    # Find start of cheapest consecutive block
+                    # Find cheapest consecutive block; include if we're already within it
                     best_start: datetime | None = None
                     best_cost = float("inf")
                     for i in range(len(prices) - n_slots + 1):
@@ -928,17 +933,25 @@ class DHWCoordinator(DataUpdateCoordinator):
                             best_cost = total
                             best_start = window[0][0]
                     if best_start is not None:
-                        slot_start = self._to_local_slot(best_start, now.tzinfo, slot_minutes)
-                        if slot_start > now:
-                            candidates.append(slot_start)
+                        local_start = self._to_local_slot(best_start, now.tzinfo, slot_minutes)
+                        block_end_dt = (
+                            best_start + timedelta(minutes=slot_minutes * n_slots)
+                        ).astimezone(now.tzinfo)
+                        if local_start > now:
+                            candidates.append(local_start)
+                        elif now < block_end_dt:
+                            # Currently mid-block — report the current slot start as next heating
+                            candidates.append(current_slot)
                 else:
-                    # First upcoming slot from cheapest-n_slots individual slots
-                    cheapest = sorted(prices, key=lambda x: x[1])[:n_slots]
+                    # First cheap slot from current slot onwards (includes current slot if cheap)
+                    future_prices = [
+                        (t, p) for t, p in prices
+                        if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
+                    ]
+                    cheapest = sorted(future_prices, key=lambda x: x[1])[:n_slots]
                     for slot_t, _ in sorted(cheapest, key=lambda x: x[0]):
-                        slot_start = self._to_local_slot(slot_t, now.tzinfo, slot_minutes)
-                        if slot_start > now:
-                            candidates.append(slot_start)
-                            break
+                        candidates.append(self._to_local_slot(slot_t, now.tzinfo, slot_minutes))
+                        break
 
         return min(candidates) if candidates else None
 
