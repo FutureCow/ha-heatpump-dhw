@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.6
+ * Heat Pump DHW Card — v2.7
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -192,7 +192,7 @@ class HeatpumpDhwCard extends HTMLElement {
   }
 
   // ── Price chart renderer ──
-  _renderPriceChart(allPrices, nextHeatingDate, isHeating, cheapHours) {
+  _renderPriceChart(allPrices, nextHeatingDate, isHeating, plannedHeatingSlots) {
     if (!allPrices.length) return "";
 
     // Detect slot resolution
@@ -219,13 +219,12 @@ class HeatpumpDhwCard extends HTMLElement {
     const maxP = Math.max(...prices);
     const range = maxP - minP || 0.001;
 
-    // Mark cheapest N slots (convert hours → slots based on resolution)
-    const n = Math.max(1, Math.round((cheapHours || 2) * (60 / slotMin)));
-    const cheapSlots = new Set(
-      [...bars]
-        .sort((a, b) => a.price - b.price)
-        .slice(0, n)
-        .map(e => e.start.getTime())
+    // Planned heating slots from integration (via next_heating sensor attribute)
+    const plannedSlots = new Set(
+      (plannedHeatingSlots || []).map(iso => {
+        const d = new Date(iso);
+        return Math.floor(d.getTime() / slotMs) * slotMs;
+      })
     );
 
     // Next heating slot (aligned)
@@ -249,7 +248,7 @@ class HeatpumpDhwCard extends HTMLElement {
     const barHtml = bars.map((entry, i) => {
       const ms = entry.start.getTime();
       const isCur    = ms === curSlotMs;
-      const isCheap  = cheapSlots.has(ms);
+      const isCheap  = plannedSlots.has(ms);
       const isNhSlot = nhMs !== null && ms === nhMs;
 
       const heightPct = (15 + ((entry.price - minP) / range) * 72).toFixed(1);
@@ -303,7 +302,7 @@ class HeatpumpDhwCard extends HTMLElement {
       </div>
       <div style="display:flex;gap:14px;margin-top:5px;font-size:0.7rem;color:var(--secondary-text-color);">
         <span>▐ Huidig${isHeating ? " (aan het verwarmen)" : ""}</span>
-        <span><span style="color:#22c55e;font-weight:700;">▼</span> Gepland goedkoop</span>
+        <span><span style="color:#22c55e;font-weight:700;">▼</span> Gepland verwarmen</span>
         ${nhMs != null ? "<span>🔥 Volgende verwarming</span>" : ""}
       </div>
     </div>`;
@@ -343,8 +342,10 @@ class HeatpumpDhwCard extends HTMLElement {
     // Price chart
     const allPrices      = this._parseForecast(c.price_forecast_sensor);
     const nextHeatingDate = nextStr && nextStr !== "unknown" ? new Date(nextStr) : null;
+    const nextHeatState  = c.next_heating_sensor ? this._hass.states[c.next_heating_sensor] : null;
+    const plannedSlots   = nextHeatState?.attributes?.planned_heating_slots || [];
     const chartHtml      = c.price_forecast_sensor
-      ? this._renderPriceChart(allPrices, nextHeatingDate, isHeating, cheapHours)
+      ? this._renderPriceChart(allPrices, nextHeatingDate, isHeating, plannedSlots)
       : "";
 
     const nextRel = this._formatRelTime(nextStr);

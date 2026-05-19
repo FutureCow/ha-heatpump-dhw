@@ -214,3 +214,11 @@ class DHWSensor(DHWEntity, SensorEntity):
             from homeassistant.util import dt as dt_util
             return dt_util.parse_datetime(value)
         return value
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        if self.coordinator.data is None:
+            return None
+        if self.entity_description.key == "next_heating":
+            return {"planned_heating_slots": self.coordinator.data.get("planned_heating_slots", [])}
+        return None

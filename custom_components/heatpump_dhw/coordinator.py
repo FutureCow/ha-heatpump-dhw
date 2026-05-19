@@ -163,6 +163,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._shower_warning_sent: set[str] = set()
 
         self._next_heating: datetime | None = None
+        self._planned_slots: list[str] = []
 
     # ------------------------------------------------------------------
     # Setup / teardown
@@ -334,6 +335,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         await self._check_shower_readiness(now, boiler_temp)
 
         self._next_heating = self._calc_next_heating(now)
+        self._planned_slots = self._calc_planned_slots(now)
 
         if now.month != self._monthly_month:
             _LOGGER.debug(
@@ -373,6 +375,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             "session_cop": self._last_session.get("cop"),
             "avg_cop": mean(self._cop_samples) if self._cop_samples else None,
             "next_heating": self._next_heating.isoformat() if self._next_heating else None,
+            "planned_heating_slots": self._planned_slots,
             "heat_up_duration_min": round(mean(self._heat_up_samples)) if self._heat_up_samples else None,
             "monthly_kwh": (
                 round(meter_kwh - self._month_start_meter, 3)
@@ -965,6 +968,59 @@ class DHWCoordinator(DataUpdateCoordinator):
                         break
 
         return min(candidates) if candidates else None
+
+    def _calc_planned_slots(self, now: datetime) -> list[str]:
+        """Return ISO timestamps of all price-mode heating slots planned."""
+        if not self.price_mode_enabled:
+            return []
+        boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
+        normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+        n = self._price_mode_n or self._needed_cheap_hours(boiler_temp, normal_temp)
+        if n <= 0:
+            return []
+        prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
+        if not prices:
+            return []
+        slot_minutes = self._detect_slot_minutes(prices) if len(prices) >= 2 else 60
+        n_slots = n * (60 // slot_minutes)
+        slot_seconds = slot_minutes * 60
+        current_slot = now.replace(
+            minute=(now.minute // slot_minutes) * slot_minutes,
+            second=0, microsecond=0,
+        )
+        consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
+        if consecutive:
+            best_start: datetime | None = None
+            best_cost = float("inf")
+            for i in range(len(prices) - n_slots + 1):
+                window = prices[i : i + n_slots]
+                if any(
+                    (window[j + 1][0] - window[j][0]).total_seconds() != slot_seconds
+                    for j in range(n_slots - 1)
+                ):
+                    continue
+                total = sum(p for _, p in window)
+                if total < best_cost:
+                    best_cost = total
+                    best_start = window[0][0]
+            if best_start is None:
+                return []
+            return [
+                self._to_local_slot(
+                    best_start + timedelta(minutes=slot_minutes * i), now.tzinfo, slot_minutes
+                ).isoformat()
+                for i in range(n_slots)
+            ]
+        else:
+            future_prices = [
+                (t, p) for t, p in prices
+                if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
+            ]
+            cheapest = sorted(future_prices, key=lambda x: x[1])[:n_slots]
+            return [
+                self._to_local_slot(t, now.tzinfo, slot_minutes).isoformat()
+                for t, _ in cheapest
+            ]
 
     # ------------------------------------------------------------------
     # Hardware control
