@@ -7,14 +7,18 @@ Intelligente sturing van je warmtepomp boiler (warm tapwater) op basis van zonne
 | Functie | Beschrijving |
 |---------|-------------|
 | ☀️ Zonne-energie modus | Verwarmt automatisch als er voldoende PV-overschot is |
-| 🚀 Boost modus | Verhoogt doeltemperatuur tijdelijk bij groot overschot |
-| 💶 Dynamische prijsmodus | Verwarmt als de stroomprijs onder een drempel valt (Zonneplan, etc.) |
+| 🚀 Boost modus | Verhoogt doeltemperatuur tijdelijk bij groot overschot; activeer optioneel elektrisch element |
+| 💶 Dynamische prijsmodus | Verwarmt in de goedkoopste uren/kwartieren (15/30/60 min prijsresolutie, automatisch herkend) |
+| 🔢 Niet-aaneengesloten uren | Kies de N goedkoopste losse uren — dure tussenuren worden overgeslagen |
+| 🧱 Aaneengesloten blok | Optioneel: verwarmt in het goedkoopste aaneengesloten tijdblok |
 | 🚿 Douche schema | Pre-heat zodat er altijd genoeg warm water is op het geplande tijdstip |
 | 🦠 Legionella preventie | Wekelijkse run naar 65°C (configureerbaar dag/uur) |
 | 🏖️ Vakantie modus | Houdt een minimale temperatuur aan bij afwezigheid |
 | 📬 Push notificaties | Melding bij sessie start/einde, legionella run en storingen |
-| 📊 Energie tracking | kWh en kosten per sessie + maandelijkse besparing |
-| 🧠 Slim herstel | Leert hoe lang opwarmen duurt en start op het juiste moment |
+| 📊 Energie tracking | kWh en kosten per sessie, maand en jaar — nauwkeuriger met energiemeter sensor |
+| 🧠 Slim leren | Leert opwarmtijd, verwarmingssnelheid en warmteverlies tank uit metingen |
+| ⚡ COP berekening | Berekent en logt de coefficient of performance per sessie |
+| 🛡️ Anti-blokkeer | Korte verplichte run als de pomp te lang stilstond |
 
 ## Installatie
 
@@ -41,6 +45,9 @@ Hieronder staat per sensor welke eenheid en welk formaat verwacht wordt. Verkeer
 |--------|---------|---------|-----------|
 | Boiler watertemperatuur | `°C` | Decimaal getal | `54.3` |
 | Vermogen / verbruik | `W` | Geheel of decimaal getal | `850` |
+| Energiemeter (optioneel) | `kWh` | Cumulatieve teller | `1234.5` |
+
+> **Energiemeter sensor:** Als je een kWh-meter hebt op je boiler, geef die dan op. De integratie berekent dan het verbruik per sessie nauwkeuriger dan via de vermogenssensor.
 
 ### Hardware bediening
 
@@ -48,8 +55,10 @@ Hieronder staat per sensor welke eenheid en welk formaat verwacht wordt. Verkeer
 |----------|------|-------------|-----------|
 | Gewenste temperatuur | `number` of `input_number` | `35` – `80` °C | `55` |
 | Warmtepomp schakelaar | `switch` of `input_boolean` | `on` / `off` | — |
-| E-heater schakelaar | `switch` of `input_boolean` | `on` / `off` | — |
-| E-heater boost temperatuur | `number` of `input_number` | °C | `65` |
+| E-heater schakelaar (optioneel) | `switch` of `input_boolean` | `on` / `off` | — |
+| E-heater setpoint entiteit (optioneel) | `number` of `input_number` | °C | `65` |
+
+> **E-heater setpoint:** Sommige boilers activeren het elektrisch element alleen als een apart setpoint hoger wordt ingesteld dan de warmtepomp-setpoint. Geef in dat geval de bijbehorende entiteit op.
 
 ### Zon & dynamische prijzen
 
@@ -199,6 +208,68 @@ De grafiek toont de komende uren op basis van de `price_forecast_sensor`. De slo
 | Oranje ring | Huidig slot, boiler is actief aan het verwarmen |
 | Grijze ring | Huidig slot, boiler staat op standby |
 | 🔥 vlammetje | Volgende geplande verwarmingsmoment |
+
+## Alle instellingen (drempelwaarden & opties)
+
+Alle onderstaande opties zijn instelbaar via **Instellingen → Integraties → Heat Pump DHW → Configureren → Drempelwaarden & temperaturen**.
+
+### Zonne-energie modus
+
+| Instelling | Standaard | Beschrijving |
+|-----------|-----------|-------------|
+| Zonne-energie modus | aan | Verwarmt automatisch bij voldoende PV-overschot |
+| Min. overschot voor zonne-modus (W) | `500` | Minimaal PV-overschot voordat de boiler start |
+| Boost modus | aan | Activeert boost (hoger setpoint / e-heater) bij groot overschot |
+| Overschot voor boost (W) | `2000` | Overschotdrempel voor boost modus |
+
+### Dynamische prijsmodus
+
+| Instelling | Standaard | Beschrijving |
+|-----------|-----------|-------------|
+| Dynamische prijs modus | aan | Verwarmt in de goedkoopste uren |
+| Maximale prijs (€/kWh) | `0.10` | Bovengrens: verwarmt alleen als prijs ≤ deze waarde (fallback zonder forecast) |
+| Uren prijsmodus fallback | `2` | Aantal goedkoopste uren als de verwarmingssnelheid nog niet geleerd is (`0` = automatisch op basis van geleerde snelheid) |
+| Prijsvenster douche schema (uur) | `24` | Hoe ver vooruit de forecast doorzocht wordt voor douche-planning (`0` = volledige beschikbare forecast) |
+| Prijsmodus: goedkoopste aaneengesloten blok | uit | Als aan: verwarmt in het goedkoopste aaneengesloten blok in plaats van losse goedkoopste uren |
+
+> **Slot-resolutie:** De prijsmodus ondersteunt automatisch 15-, 30- en 60-minuut prijsresolutie. De resolutie wordt per forecast automatisch herkend — geen configuratie nodig.
+
+### Temperaturen
+
+| Instelling | Standaard | Beschrijving |
+|-----------|-----------|-------------|
+| Normale doeltemperatuur (°C) | `55` | Dagelijks streefdoel |
+| Boost temperatuur (°C) | `65` | Hogere doeltemperatuur tijdens boost modus |
+| Vakantie minimumtemperatuur (°C) | `40` | Minimumtemperatuur als vakantie modus actief is |
+| Boiler activeringsdrempel (°C onder setpoint) | `0` | Als je boiler pas reageert als de temperatuur minstens X graden onder het setpoint zit, stel dit hier in (bijv. `5`). `0` = uitgeschakeld. |
+
+> **Boiler activeringsdrempel:** Sommige warmtepompen reageren niet op een aan-commando als de boilertemperatuur al dicht bij het setpoint zit (bijv. geen actie als boiler op 47°C staat en setpoint 50°C is). Stel de drempel in op de dode zone van jouw hardware zodat de integratie niet zinloos blijft proberen.
+
+### Legionella preventie
+
+| Instelling | Standaard | Beschrijving |
+|-----------|-----------|-------------|
+| Legionella preventie | aan | Wekelijkse run naar hoge temperatuur |
+| Legionella temperatuur (°C) | `65` | Doeltemperatuur voor legionella run |
+| Dag van legionella run | zondag | Dag van de week |
+| Uur van legionella run | `13` | Uur van de dag (0–23) |
+
+### Slim leren & energiebeheer
+
+| Instelling | Standaard | Beschrijving |
+|-----------|-----------|-------------|
+| Warmteverlies tank (°C/u) | `0.5` | Startwaarde voor warmteverlies; wordt automatisch bijgeleerd uit metingen |
+| Tankvolume (L) | `200` | Gebruikt voor COP-berekening |
+| Anti-blokkeer interval (dagen) | `3` | Maximaal aantal dagen zonder verwarming voordat een verplichte korte run plaatsvindt |
+| Voorspellend verwarmen | aan | Slaat prijsmodus over als morgen veel zon verwacht wordt (zodat de boiler daarna op zonne-energie wordt verwarmd) |
+
+### Vakantie modus
+
+| Instelling | Standaard | Beschrijving |
+|-----------|-----------|-------------|
+| Vakantie modus na afwezigheid van (uur) | `24` | Aantal uren dat de aanwezigheidssensor `off`/`not_home` moet zijn voordat vakantie modus automatisch inschakelt |
+
+---
 
 ## Douche schema instellen
 
