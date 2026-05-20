@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.11
+ * Heat Pump DHW Card — v2.12
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -20,7 +20,7 @@
  *   boost_switch: switch.dhw_boost_mode
  *   vacation_switch: switch.dhw_vacation_mode
  *   legionella_switch: switch.dhw_legionella_mode
- *   manual_switch: switch.dhw_manual_mode   # optioneel, handmatig verwarmen
+ *   manual_switch: switch.dhw_manual_mode   # grote aan/uit knop bovenaan
  */
 
 const MODE_COLORS = {
@@ -356,14 +356,13 @@ class HeatpumpDhwCard extends HTMLElement {
 
     const nextRel = this._formatRelTime(nextStr);
 
-    // Mode switches
+    // Mode switches (manual has its own big button below)
     const switches = [
       { id: c.solar_switch,     label: "Zon",       icon: "☀️" },
       { id: c.price_switch,     label: "Prijs",     icon: "💶" },
       { id: c.boost_switch,     label: "Boost",     icon: "🚀" },
       { id: c.vacation_switch,  label: "Vakantie",  icon: "🏖️" },
       { id: c.legionella_switch,label: "Legionella",icon: "🦠" },
-      { id: c.manual_switch,    label: "Handmatig", icon: "✋" },
     ].filter(sw => sw.id);
 
     const switchHtml = switches.map(sw => {
@@ -411,8 +410,10 @@ class HeatpumpDhwCard extends HTMLElement {
         .sw-on  { background:var(--primary-color,#3b82f6); color:#fff; }
         .sw-off { background:var(--secondary-background-color,#e5e7eb); color:var(--secondary-text-color); }
         .sw-btn:hover { opacity:0.8; }
-        .heat-now-btn { border:none; border-radius:8px; padding:8px 16px; font-size:0.84rem; font-weight:600; cursor:pointer; font-family:inherit; background:#f97316; color:#fff; transition:opacity 0.15s; width:100%; margin-bottom:8px; }
-        .heat-now-btn:hover { opacity:0.85; }
+        .manual-btn { border:none; border-radius:10px; padding:10px 16px; font-size:0.88rem; font-weight:600; cursor:pointer; font-family:inherit; width:100%; margin-bottom:8px; transition:all 0.2s; display:flex; align-items:center; justify-content:center; gap:8px; }
+        .manual-btn-off { background:var(--secondary-background-color,#e5e7eb); color:var(--primary-text-color); }
+        .manual-btn-on  { background:#f97316; color:#fff; box-shadow:0 0 0 3px rgba(249,115,22,0.3); }
+        .manual-btn:hover { opacity:0.85; }
       </style>
 
       <div class="dhw-header">
@@ -448,15 +449,20 @@ class HeatpumpDhwCard extends HTMLElement {
       ${nextRel ? `<div class="dhw-next">🚿 Volgende verwarming: <strong>${nextRel}</strong>${plannedMinutes ? ` &nbsp;(~${plannedMinutes} min)` : ""}</div>` : ""}
 
       <hr class="dhw-divider">
-      ${c.heat_now_button ? `<button class="heat-now-btn" id="heat-now-btn">🔥 Nu verwarmen</button>` : ""}
+      ${c.manual_switch ? (() => {
+        const manOn = this._state(c.manual_switch) === "on";
+        return `<button class="manual-btn ${manOn ? "manual-btn-on" : "manual-btn-off"}" id="manual-toggle-btn">
+          ${manOn ? "🔥" : "✋"} Handmatig verwarmen &nbsp;<span style="font-size:0.75rem;opacity:0.85;">${manOn ? "● AAN" : "○ UIT"}</span>
+        </button>`;
+      })() : ""}
       <div class="dhw-switches">${switchHtml}</div>
     </ha-card>`;
 
     this.querySelectorAll(".sw-btn").forEach(btn =>
       btn.addEventListener("click", () => this._toggleSwitch(btn.dataset.entity))
     );
-    const hnBtn = this.querySelector("#heat-now-btn");
-    if (hnBtn) hnBtn.addEventListener("click", () => this._pressButton(c.heat_now_button));
+    const manBtn = this.querySelector("#manual-toggle-btn");
+    if (manBtn) manBtn.addEventListener("click", () => this._toggleSwitch(c.manual_switch));
   }
 
   static getStubConfig() {
@@ -480,7 +486,6 @@ class HeatpumpDhwCard extends HTMLElement {
       vacation_switch: "switch.dhw_vacation_mode",
       legionella_switch: "switch.dhw_legionella_mode",
       manual_switch: "",
-      heat_now_button: "",
     };
   }
 }
