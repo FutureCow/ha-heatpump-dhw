@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.10
+ * Heat Pump DHW Card — v2.11
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -445,7 +445,7 @@ class HeatpumpDhwCard extends HTMLElement {
         ${power && power !== "unknown" ? `<div class="dhw-chip"><div class="dhw-chip-label">Vermogen</div><div class="dhw-chip-value">${this._fmt(power, 0)} W</div></div>` : ""}
       </div>` : ""}
 
-      ${nextRel ? `<div class="dhw-next">🚿 Volgende verwarming: <strong>${nextRel}</strong>${plannedMinutes ? ` &nbsp;(~${plannedMinutes} min)` : heatUp && heatUp !== "unknown" ? ` &nbsp;(~${this._fmt(heatUp, 0)} min)` : ""}</div>` : ""}
+      ${nextRel ? `<div class="dhw-next">🚿 Volgende verwarming: <strong>${nextRel}</strong>${plannedMinutes ? ` &nbsp;(~${plannedMinutes} min)` : ""}</div>` : ""}
 
       <hr class="dhw-divider">
       ${c.heat_now_button ? `<button class="heat-now-btn" id="heat-now-btn">🔥 Nu verwarmen</button>` : ""}
