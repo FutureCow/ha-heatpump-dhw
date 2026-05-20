@@ -318,10 +318,10 @@ def _defaults_fields(current: dict | None = None, show_legionella_details: bool 
             ),
             vol.Optional(OPT_LEGIONELLA_MODE_ENABLED, default=_n(OPT_LEGIONELLA_MODE_ENABLED, True)): BooleanSelector(),
             **({
-                OPT_LEGIONELLA_TEMP: NumberSelector(
+                vol.Optional(OPT_LEGIONELLA_TEMP, default=_n(OPT_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)): NumberSelector(
                     NumberSelectorConfig(min=60, max=80, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
                 ),
-                OPT_LEGIONELLA_DAY: SelectSelector(
+                vol.Optional(OPT_LEGIONELLA_DAY, default=str(_n(OPT_LEGIONELLA_DAY, DEFAULT_LEGIONELLA_DAY))): SelectSelector(
                     SelectSelectorConfig(
                         options=[
                             SelectOptionDict(value="0", label="Maandag"),
@@ -335,7 +335,7 @@ def _defaults_fields(current: dict | None = None, show_legionella_details: bool 
                         mode=SelectSelectorMode.LIST,
                     )
                 ),
-                OPT_LEGIONELLA_HOUR: NumberSelector(
+                vol.Optional(OPT_LEGIONELLA_HOUR, default=_n(OPT_LEGIONELLA_HOUR, DEFAULT_LEGIONELLA_HOUR)): NumberSelector(
                     NumberSelectorConfig(min=0, max=23, step=1, unit_of_measurement="u", mode=NumberSelectorMode.BOX)
                 ),
             } if show_legionella_details else {}),
