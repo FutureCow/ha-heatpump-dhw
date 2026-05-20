@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.9
+ * Heat Pump DHW Card — v2.10
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -342,6 +342,14 @@ class HeatpumpDhwCard extends HTMLElement {
     const nextHeatingDate = nextStr && nextStr !== "unknown" ? new Date(nextStr) : null;
     const nextHeatState  = c.next_heating_sensor ? this._hass.states[c.next_heating_sensor] : null;
     const plannedSlots   = nextHeatState?.attributes?.planned_heating_slots || [];
+    // Derive expected duration from planned slots so it always matches the white bars shown
+    let plannedMinutes = null;
+    if (plannedSlots.length >= 2) {
+      const slotMs = Math.abs(new Date(plannedSlots[1]) - new Date(plannedSlots[0]));
+      plannedMinutes = Math.round(plannedSlots.length * slotMs / 60000);
+    } else if (plannedSlots.length === 1) {
+      plannedMinutes = 60;
+    }
     const chartHtml      = c.price_forecast_sensor
       ? this._renderPriceChart(allPrices, nextHeatingDate, isHeating, plannedSlots)
       : "";
@@ -437,7 +445,7 @@ class HeatpumpDhwCard extends HTMLElement {
         ${power && power !== "unknown" ? `<div class="dhw-chip"><div class="dhw-chip-label">Vermogen</div><div class="dhw-chip-value">${this._fmt(power, 0)} W</div></div>` : ""}
       </div>` : ""}
 
-      ${nextRel ? `<div class="dhw-next">🚿 Volgende verwarming: <strong>${nextRel}</strong>${heatUp && heatUp !== "unknown" ? ` &nbsp;(~${this._fmt(heatUp, 0)} min)` : ""}</div>` : ""}
+      ${nextRel ? `<div class="dhw-next">🚿 Volgende verwarming: <strong>${nextRel}</strong>${plannedMinutes ? ` &nbsp;(~${plannedMinutes} min)` : heatUp && heatUp !== "unknown" ? ` &nbsp;(~${this._fmt(heatUp, 0)} min)` : ""}</div>` : ""}
 
       <hr class="dhw-divider">
       ${c.heat_now_button ? `<button class="heat-now-btn" id="heat-now-btn">🔥 Nu verwarmen</button>` : ""}
