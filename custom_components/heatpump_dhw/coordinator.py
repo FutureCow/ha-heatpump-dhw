@@ -336,7 +336,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         now = dt_util.now()
 
         boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
-        power_w = self._state_float(self.cfg.get(CONF_POWER_SENSOR))
+        power_w = self._state_watts(self.cfg.get(CONF_POWER_SENSOR))
         meter_kwh = self._state_float(self.cfg.get(CONF_ENERGY_METER_SENSOR))
         surplus_w = self._state_watts(self.cfg.get(CONF_PV_SURPLUS_SENSOR))
         price_eur = self._state_float(self.cfg.get(CONF_DYNAMIC_PRICE_SENSOR))
