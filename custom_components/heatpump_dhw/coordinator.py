@@ -175,9 +175,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._heat_up_samples = stored.get("heat_up_samples", [])
         self._cop_samples = stored.get("cop_samples", [])
         # loss_samples now stores normalised k values (°C/h per °C ΔT).
-        # Discard old raw °C/h values (>0.5 indicates pre-normalisation format).
-        raw_loss = stored.get("loss_samples", [])
-        self._loss_samples = [v for v in raw_loss if v < 0.5]
+        # Old raw °C/h values cannot be reliably distinguished from k values → discard all.
+        self._loss_samples = []
         self._heat_rate_samples = stored.get("heat_rate_samples", [])
         raw_ll = stored.get("last_legionella_run")
         self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
