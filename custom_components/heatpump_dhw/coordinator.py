@@ -401,19 +401,22 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._last_idle_time = None
             return
 
-        if self._last_idle_temp is not None and self._last_idle_time is not None:
-            elapsed_hours = (now - self._last_idle_time).total_seconds() / 3600
-            if 0.1 <= elapsed_hours <= 2.0:
-                drop = self._last_idle_temp - boiler_temp
-                if drop > 0:
-                    rate = drop / elapsed_hours
-                    if 0.05 <= rate <= 3.0:  # sanity bounds
-                        self._loss_samples.append(rate)
-                        if len(self._loss_samples) > HEAT_UP_SAMPLE_SIZE:
-                            self._loss_samples.pop(0)
+        if self._last_idle_temp is None:
+            self._last_idle_temp = boiler_temp
+            self._last_idle_time = now
+            return
 
-        self._last_idle_temp = boiler_temp
-        self._last_idle_time = now
+        elapsed_hours = (now - self._last_idle_time).total_seconds() / 3600
+        if elapsed_hours >= 0.5:
+            drop = self._last_idle_temp - boiler_temp
+            if drop > 0:
+                rate = drop / elapsed_hours
+                if 0.05 <= rate <= 3.0:
+                    self._loss_samples.append(rate)
+                    if len(self._loss_samples) > HEAT_UP_SAMPLE_SIZE:
+                        self._loss_samples.pop(0)
+            self._last_idle_temp = boiler_temp
+            self._last_idle_time = now
 
     # ------------------------------------------------------------------
     # Price forecast helpers
