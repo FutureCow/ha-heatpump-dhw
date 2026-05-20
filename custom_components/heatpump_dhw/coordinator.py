@@ -174,9 +174,12 @@ class DHWCoordinator(DataUpdateCoordinator):
         stored = await self._store.async_load() or {}
         self._heat_up_samples = stored.get("heat_up_samples", [])
         self._cop_samples = stored.get("cop_samples", [])
-        # loss_samples now stores normalised k values (°C/h per °C ΔT).
-        # Old raw °C/h values cannot be reliably distinguished from k values → discard all.
-        self._loss_samples = []
+        # loss_samples stores normalised k values (°C/h per °C ΔT) since storage_version 2.
+        # Discard once on migration from the old raw °C/h format.
+        if stored.get("storage_version", 1) >= 2:
+            self._loss_samples = stored.get("loss_samples", [])
+        else:
+            self._loss_samples = []
         self._heat_rate_samples = stored.get("heat_rate_samples", [])
         raw_ll = stored.get("last_legionella_run")
         self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
@@ -208,6 +211,7 @@ class DHWCoordinator(DataUpdateCoordinator):
     async def _save_state(self) -> None:
         await self._store.async_save(
             {
+                "storage_version": 2,
                 "heat_up_samples": self._heat_up_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "cop_samples": self._cop_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "loss_samples": self._loss_samples[-HEAT_UP_SAMPLE_SIZE:],
