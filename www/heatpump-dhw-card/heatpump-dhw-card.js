@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.8
+ * Heat Pump DHW Card — v2.9
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -20,6 +20,7 @@
  *   boost_switch: switch.dhw_boost_mode
  *   vacation_switch: switch.dhw_vacation_mode
  *   legionella_switch: switch.dhw_legionella_mode
+ *   manual_switch: switch.dhw_manual_mode   # optioneel, handmatig verwarmen
  */
 
 const MODE_COLORS = {
@@ -354,6 +355,7 @@ class HeatpumpDhwCard extends HTMLElement {
       { id: c.boost_switch,     label: "Boost",     icon: "🚀" },
       { id: c.vacation_switch,  label: "Vakantie",  icon: "🏖️" },
       { id: c.legionella_switch,label: "Legionella",icon: "🦠" },
+      { id: c.manual_switch,    label: "Handmatig", icon: "✋" },
     ].filter(sw => sw.id);
 
     const switchHtml = switches.map(sw => {
@@ -469,6 +471,7 @@ class HeatpumpDhwCard extends HTMLElement {
       boost_switch: "switch.dhw_boost_mode",
       vacation_switch: "switch.dhw_vacation_mode",
       legionella_switch: "switch.dhw_legionella_mode",
+      manual_switch: "",
       heat_now_button: "",
     };
   }

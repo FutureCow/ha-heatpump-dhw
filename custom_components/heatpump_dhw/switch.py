@@ -56,6 +56,12 @@ SWITCHES: tuple[DHWSwitchDescription, ...] = (
         icon="mdi:airplane-takeoff",
         attr="vacation_active",
     ),
+    DHWSwitchDescription(
+        key="manual_mode",
+        name="Handmatig verwarmen",
+        icon="mdi:hand-back-right",
+        attr="manual_heat_enabled",
+    ),
 )
 
 

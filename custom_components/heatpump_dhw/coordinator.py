@@ -167,6 +167,18 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._planned_slots: list[str] = []
 
     # ------------------------------------------------------------------
+    # Public properties for switch entities
+    # ------------------------------------------------------------------
+
+    @property
+    def manual_heat_enabled(self) -> bool:
+        return self._manual_heat
+
+    @manual_heat_enabled.setter
+    def manual_heat_enabled(self, value: bool) -> None:
+        self._manual_heat = value
+
+    # ------------------------------------------------------------------
     # Setup / teardown
     # ------------------------------------------------------------------
 
