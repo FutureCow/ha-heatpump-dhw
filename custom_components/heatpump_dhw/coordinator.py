@@ -153,6 +153,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         self.vacation_mode_enabled: bool = False
 
         self._manual_heat: bool = False
+        self._manual_heat_start_temp: float | None = None  # boilertemp bij activatie
         self._price_mode_n: int = 0  # cheap-hour count fixed at start of planning cycle
 
         # Absence tracking for delayed vacation mode
@@ -177,6 +178,8 @@ class DHWCoordinator(DataUpdateCoordinator):
     @manual_heat_enabled.setter
     def manual_heat_enabled(self, value: bool) -> None:
         self._manual_heat = value
+        if not value:
+            self._manual_heat_start_temp = None
 
     # ------------------------------------------------------------------
     # Setup / teardown
@@ -718,10 +721,25 @@ class DHWCoordinator(DataUpdateCoordinator):
     ) -> tuple[str, float]:
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
 
-        # 0. Handmatig aan — reset als boiler op temperatuur is
+        # 0. Handmatig aan
         if self._manual_heat:
-            if boiler_temp is not None and boiler_temp >= normal_temp - TEMP_HYSTERESIS:
+            # Leg starttemperatuur vast op eerste tick na activatie
+            if boiler_temp is not None and self._manual_heat_start_temp is None:
+                self._manual_heat_start_temp = boiler_temp
+            # Auto-reset alleen als boiler écht omhoog is gegaan van koud naar doel.
+            # Was de boiler al warm bij activatie, dan blijft de schakelaar aan totdat
+            # de gebruiker hem zelf uitzet — anders gaat hij meteen terug naar "off".
+            start_was_below = (
+                self._manual_heat_start_temp is not None
+                and self._manual_heat_start_temp < normal_temp - TEMP_HYSTERESIS
+            )
+            reached_target = (
+                boiler_temp is not None
+                and boiler_temp >= normal_temp - TEMP_HYSTERESIS
+            )
+            if start_was_below and reached_target:
                 self._manual_heat = False
+                self._manual_heat_start_temp = None
             else:
                 return MODE_MANUAL, normal_temp
 
