@@ -885,15 +885,26 @@ class DHWCoordinator(DataUpdateCoordinator):
     ) -> tuple[datetime | None, float]:
         """Find cheapest hour to pre-heat for a shower, with heat-loss buffer.
 
-        Returns (slot_start, target_temp) or (None, required_temp) if no forecast.
+        If price data does not yet cover the period near the shower deadline
+        (e.g. day-ahead prices not published until 13:30), heating is deferred
+        until sufficient data is available. Exception: if a currently known price
+        is exceptional (≤ 50 % of the configured threshold), the boiler is
+        pre-heated to a raised target to compensate for the extra tank-loss time.
+
+        Returns (slot_start, target_temp) or (None, required_temp) if no
+        forecast data or if heating should be deferred.
         """
         window_hours = self._effective_window_hours()
         outside_temp = self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR))
         boost_temp = self._opt(OPT_BOOST_TEMP, DEFAULT_BOOST_TEMP)
+        price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
 
         all_prices = self._get_forecast_prices(now, hours=window_hours)
         if not all_prices:
             return None, required_temp
+
+        # Latest moment by which heating must START for the boiler to be ready
+        latest_start = shower_dt - timedelta(minutes=heat_up_min + 10)
 
         # Slots feasible for shower pre-heat (heating finishes before shower)
         feasible = [
@@ -903,7 +914,45 @@ class DHWCoordinator(DataUpdateCoordinator):
         if not feasible:
             return None, required_temp
 
-        # Calculate needed hours dynamically; fall back to configured value
+        data_horizon = max(t for t, _ in all_prices)
+
+        # If known price data ends more than 3 h before the latest feasible
+        # heating start, we are missing future prices (e.g. it is Wednesday and
+        # Friday's day-ahead prices are not yet published).  Committing to an
+        # early Thursday slot would overshoot on tank loss.  Defer — UNLESS a
+        # currently available price is exceptional (≤ 50 % of the configured
+        # threshold), in which case pre-heat to a raised target to compensate.
+        if data_horizon < latest_start - timedelta(hours=3):
+            exceptional_threshold = max(0.0, price_threshold) * 0.5
+            exceptional = [(t, p) for t, p in feasible if p <= exceptional_threshold]
+            if not exceptional:
+                _LOGGER.debug(
+                    "DHW: douche %s — uitgesteld: prijsdata tot %s, "
+                    "planningsvenster begint %s; geen uitzonderlijk goedkope uren",
+                    shower_dt.strftime("%a %d-%b %H:%M"),
+                    data_horizon.strftime("%a %d-%b %H:%M"),
+                    latest_start.strftime("%a %d-%b %H:%M"),
+                )
+                return None, required_temp
+
+            # Exceptional price: pick the LATEST such slot (shortest tank-loss gap)
+            # and raise the target to compensate for the heat lost before the shower.
+            best_t = max(t for t, _ in exceptional)
+            best_price = {t: p for t, p in exceptional}[best_t]
+            heat_end = best_t + timedelta(minutes=heat_up_min)
+            hours_gap = max(0.0, (shower_dt - heat_end).total_seconds() / 3600)
+            loss_rate = self._loss_rate_at(required_temp, outside_temp)
+            buffer = min(hours_gap * loss_rate, boost_temp - required_temp)
+            target = round(min(required_temp + buffer, boost_temp), 1)
+            _LOGGER.info(
+                "DHW: douche %s — uitzonderlijk goedkoop (%.3f €/kWh ≤ %.3f), "
+                "pre-heat naar %.1f°C (+%.1f°C buffer voor %dh warmteverlies)",
+                shower_dt.strftime("%a %d-%b %H:%M"), best_price, exceptional_threshold,
+                target, buffer, int(hours_gap),
+            )
+            return best_t, target
+
+        # Normal case: data covers the planning window — pick the cheapest slot.
         cheap_n = self._needed_cheap_hours(boiler_temp, required_temp)
         cheapest_times = {
             t for t, _ in sorted(all_prices, key=lambda x: x[1])[:cheap_n]
@@ -921,7 +970,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         heat_end = best_t + timedelta(minutes=heat_up_min)
         hours_gap = max(0.0, (shower_dt - heat_end).total_seconds() / 3600)
         loss_rate = self._loss_rate_at(required_temp, outside_temp)
-        buffer = min(hours_gap * loss_rate, 8.0)  # cap at 8 °C
+        buffer = min(hours_gap * loss_rate, 8.0)  # cap at 8 °C for normal pre-heat
         target = round(min(required_temp + buffer, boost_temp), 1)
 
         return best_t, target
