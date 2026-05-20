@@ -343,12 +343,19 @@ class DHWCoordinator(DataUpdateCoordinator):
         outside_temp = self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR))
         present = self._state_bool(self.cfg.get(CONF_PRESENCE_SENSOR))
 
-        # Initialize energy meter start values on first reading
+        # Initialize energy meter start values on first reading.
+        # If the stored start meter is missing (first run or store corruption),
+        # reconstruct it from the stored accumulated kWh to avoid losing the
+        # current month/year total.
         if meter_kwh is not None:
             if self._month_start_meter is None:
-                self._month_start_meter = meter_kwh
+                self._month_start_meter = (
+                    meter_kwh - self._monthly_kwh if self._monthly_kwh > 0 else meter_kwh
+                )
             if self._year_start_meter is None:
-                self._year_start_meter = meter_kwh
+                self._year_start_meter = (
+                    meter_kwh - self._yearly_kwh if self._yearly_kwh > 0 else meter_kwh
+                )
 
         # Sync internal heating state with actual switch to detect external on/off
         # (defrost controller, manual intervention, power loss, etc.)
@@ -396,6 +403,15 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._yearly_cost = 0.0
             self._yearly_year = now.year
             self._year_start_meter = meter_kwh
+
+        # Keep accumulated kWh in sync with the live meter reading so the Store
+        # always reflects what is displayed — critical when the meter sensor
+        # becomes temporarily unavailable after a restart (fallback stays accurate).
+        if meter_kwh is not None:
+            if self._month_start_meter is not None:
+                self._monthly_kwh = max(0.0, meter_kwh - self._month_start_meter)
+            if self._year_start_meter is not None:
+                self._yearly_kwh = max(0.0, meter_kwh - self._year_start_meter)
 
         await self._save_state()
 
