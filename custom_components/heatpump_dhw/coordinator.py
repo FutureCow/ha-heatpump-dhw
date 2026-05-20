@@ -215,10 +215,11 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._last_session = stored.get("last_session", {})
 
         opts = self.entry.options
-        self.solar_mode_enabled = opts.get(OPT_SOLAR_MODE_ENABLED, True)
-        self.price_mode_enabled = opts.get(OPT_PRICE_MODE_ENABLED, True)
-        self.boost_mode_enabled = opts.get(OPT_BOOST_MODE_ENABLED, True)
-        self.legionella_mode_enabled = opts.get(OPT_LEGIONELLA_MODE_ENABLED, True)
+        self.solar_mode_enabled = stored.get("solar_mode_enabled", opts.get(OPT_SOLAR_MODE_ENABLED, True))
+        self.price_mode_enabled = stored.get("price_mode_enabled", opts.get(OPT_PRICE_MODE_ENABLED, True))
+        self.boost_mode_enabled = stored.get("boost_mode_enabled", opts.get(OPT_BOOST_MODE_ENABLED, True))
+        self.legionella_mode_enabled = stored.get("legionella_mode_enabled", opts.get(OPT_LEGIONELLA_MODE_ENABLED, True))
+        self.vacation_mode_enabled = stored.get("vacation_mode_enabled", False)
 
     async def async_shutdown(self) -> None:
         await self._save_state()
@@ -235,6 +236,11 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "last_pump_run": self._last_pump_run.isoformat() if self._last_pump_run else None,
                 "absence_start": self._absence_start.isoformat() if self._absence_start else None,
                 "vacation_manual": self._vacation_manual,
+                "solar_mode_enabled": self.solar_mode_enabled,
+                "price_mode_enabled": self.price_mode_enabled,
+                "boost_mode_enabled": self.boost_mode_enabled,
+                "legionella_mode_enabled": self.legionella_mode_enabled,
+                "vacation_mode_enabled": self.vacation_mode_enabled,
                 "monthly_kwh": self._monthly_kwh,
                 "monthly_cost": self._monthly_cost,
                 "monthly_month": self._monthly_month,
