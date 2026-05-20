@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.7
+ * Heat Pump DHW Card — v2.8
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -272,14 +272,16 @@ class HeatpumpDhwCard extends HTMLElement {
         ? `box-shadow:0 0 0 2px #fff,0 0 0 3.5px ${isHeating ? "#f97316" : "#9ca3af"};`
         : "";
 
-      const colStyle = isCheap
-        ? `background:rgba(255,255,255,0.45);border-radius:4px;`
+      const innerStyle = isCheap
+        ? `background:rgba(255,255,255,0.45);border-radius:4px 4px 0 0;`
         : "";
 
-      return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;${colStyle}">
-        <div style="height:16px;display:flex;align-items:center;justify-content:center;">${marker}</div>
-        <div style="flex:1;display:flex;align-items:flex-end;width:100%;padding:0 1px;">
-          <div style="width:100%;height:${heightPct}%;background:${color};border-radius:2px 2px 0 0;${barOutline}"></div>
+      return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;">
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;width:100%;${innerStyle}">
+          <div style="height:16px;display:flex;align-items:center;justify-content:center;">${marker}</div>
+          <div style="flex:1;display:flex;align-items:flex-end;width:100%;padding:0 1px;">
+            <div style="width:100%;height:${heightPct}%;background:${color};border-radius:2px 2px 0 0;${barOutline}"></div>
+          </div>
         </div>
         <div style="font-size:8.5px;color:var(--secondary-text-color);text-align:center;margin-top:2px;overflow:hidden;white-space:nowrap;width:100%;">${label}</div>
       </div>`;
@@ -299,11 +301,6 @@ class HeatpumpDhwCard extends HTMLElement {
       </div>
       <div style="display:flex;height:90px;align-items:stretch;gap:1px;background:var(--secondary-background-color,#f3f4f6);border-radius:10px;padding:0 6px;overflow:hidden;">
         ${barHtml}
-      </div>
-      <div style="display:flex;gap:14px;margin-top:5px;font-size:0.7rem;color:var(--secondary-text-color);">
-        <span>▐ Huidig${isHeating ? " (aan het verwarmen)" : ""}</span>
-        <span><span style="color:#22c55e;font-weight:700;">▼</span> Gepland verwarmen</span>
-        ${nhMs != null ? "<span>🔥 Volgende verwarming</span>" : ""}
       </div>
     </div>`;
   }
