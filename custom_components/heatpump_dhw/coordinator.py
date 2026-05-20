@@ -496,9 +496,15 @@ class DHWCoordinator(DataUpdateCoordinator):
         Storing k instead of a raw °C/h rate corrects for the temperature dependency
         of heat loss (Newton's law of cooling): loss ∝ (T_water − T_ambient).
         """
-        if self._heating or boiler_temp is None:
+        if self._heating:
+            # Pump started: invalidate the idle baseline so the next measurement
+            # starts fresh after the heating session ends.
             self._last_idle_temp = None
             self._last_idle_time = None
+            return
+        if boiler_temp is None:
+            # Sensor temporarily unavailable — preserve the idle baseline so a
+            # brief network blip doesn't discard hours of measurement data.
             return
 
         if self._last_idle_temp is None:
