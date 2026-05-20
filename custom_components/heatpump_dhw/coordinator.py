@@ -326,8 +326,8 @@ class DHWCoordinator(DataUpdateCoordinator):
             now, boiler_temp, surplus_w, price_eur, present
         )
 
-        await self._apply_control(desired_mode, desired_temp, boiler_temp, power_w, meter_kwh, now)
         await self._track_session(boiler_temp, power_w, price_eur, outside_temp, meter_kwh, now)
+        await self._apply_control(desired_mode, desired_temp, boiler_temp, power_w, meter_kwh, now)
 
         # Update meter prev after track_session has used it
         self._energy_meter_prev = meter_kwh
@@ -1203,9 +1203,9 @@ class DHWCoordinator(DataUpdateCoordinator):
             thermal_kwh = tank_vol * WATER_SPECIFIC_HEAT_KJ * (boiler_temp - start_temp) / 3600
             sess["cop"] = round(thermal_kwh / sess["running_kwh"], 2)
 
-        # Session complete when boiler reaches target
+        # Session complete when boiler reaches target (use same hysteresis as decide_mode)
         target_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
-        if boiler_temp is not None and boiler_temp >= target_temp - TEMP_HYSTERESIS:
+        if boiler_temp is not None and boiler_temp >= target_temp - self._effective_hysteresis():
             duration_min = (now - self._session_start).total_seconds() / 60
             self._heat_up_samples.append(duration_min)
             if len(self._heat_up_samples) > HEAT_UP_SAMPLE_SIZE:
