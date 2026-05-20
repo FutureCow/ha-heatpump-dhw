@@ -152,7 +152,7 @@ class DHWNumber(DHWEntity, NumberEntity):
 
     @property
     def native_value(self) -> float:
-        return self.coordinator.entry.options.get(
+        return self.coordinator.cfg.get(
             self.entity_description.options_key, self.entity_description.default
         )
 

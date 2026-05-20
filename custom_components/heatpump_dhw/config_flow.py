@@ -56,12 +56,10 @@ from .const import (
     DOMAIN,
     OPT_ANTI_BLOCK_DAYS,
     OPT_BOILER_SETPOINT_OFFSET,
-    OPT_BOOST_MODE_ENABLED,
     OPT_BOOST_TEMP,
     OPT_BOOST_THRESHOLD_W,
     OPT_LEGIONELLA_DAY,
     OPT_LEGIONELLA_HOUR,
-    OPT_LEGIONELLA_MODE_ENABLED,
     OPT_LEGIONELLA_TEMP,
     OPT_NORMAL_TEMP,
     OPT_CHEAP_HOURS,
@@ -69,9 +67,7 @@ from .const import (
     OPT_PRICE_WINDOW_HOURS,
     OPT_TANK_LOSS_RATE,
     OPT_PREDICTIVE_HEATING,
-    OPT_PRICE_MODE_ENABLED,
     OPT_PRICE_THRESHOLD_EUR,
-    OPT_SOLAR_MODE_ENABLED,
     OPT_SOLAR_THRESHOLD_W,
     OPT_TANK_VOLUME_L,
     OPT_VACATION_ABSENCE_HOURS,
@@ -282,15 +278,12 @@ def _defaults_fields(current: dict | None = None, show_legionella_details: bool 
         return c.get(key, default)
 
     return {
-            vol.Optional(OPT_SOLAR_MODE_ENABLED, default=_n(OPT_SOLAR_MODE_ENABLED, True)): BooleanSelector(),
             vol.Optional(OPT_SOLAR_THRESHOLD_W, default=_n(OPT_SOLAR_THRESHOLD_W, DEFAULT_SOLAR_THRESHOLD_W)): NumberSelector(
                 NumberSelectorConfig(min=0, max=10000, step=50, unit_of_measurement="W", mode=NumberSelectorMode.BOX)
             ),
-            vol.Optional(OPT_BOOST_MODE_ENABLED, default=_n(OPT_BOOST_MODE_ENABLED, True)): BooleanSelector(),
             vol.Optional(OPT_BOOST_THRESHOLD_W, default=_n(OPT_BOOST_THRESHOLD_W, DEFAULT_BOOST_THRESHOLD_W)): NumberSelector(
                 NumberSelectorConfig(min=0, max=15000, step=100, unit_of_measurement="W", mode=NumberSelectorMode.BOX)
             ),
-            vol.Optional(OPT_PRICE_MODE_ENABLED, default=_n(OPT_PRICE_MODE_ENABLED, True)): BooleanSelector(),
             vol.Optional(OPT_PRICE_THRESHOLD_EUR, default=_n(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)): NumberSelector(
                 NumberSelectorConfig(min=0, max=1, step=0.01, unit_of_measurement="€/kWh", mode=NumberSelectorMode.BOX)
             ),
@@ -305,7 +298,7 @@ def _defaults_fields(current: dict | None = None, show_legionella_details: bool 
                 NumberSelectorConfig(min=0.1, max=2.0, step=0.1, unit_of_measurement="°C/uur", mode=NumberSelectorMode.BOX)
             ),
             vol.Optional(OPT_NORMAL_TEMP, default=_n(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)): NumberSelector(
-                NumberSelectorConfig(min=35, max=80, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
+                NumberSelectorConfig(min=35, max=75, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
             ),
             vol.Optional(OPT_BOOST_TEMP, default=_n(OPT_BOOST_TEMP, DEFAULT_BOOST_TEMP)): NumberSelector(
                 NumberSelectorConfig(min=50, max=80, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
@@ -316,7 +309,6 @@ def _defaults_fields(current: dict | None = None, show_legionella_details: bool 
             vol.Optional(OPT_VACATION_ABSENCE_HOURS, default=_n(OPT_VACATION_ABSENCE_HOURS, DEFAULT_VACATION_ABSENCE_HOURS)): NumberSelector(
                 NumberSelectorConfig(min=1, max=72, step=1, unit_of_measurement="uur", mode=NumberSelectorMode.BOX)
             ),
-            vol.Optional(OPT_LEGIONELLA_MODE_ENABLED, default=_n(OPT_LEGIONELLA_MODE_ENABLED, True)): BooleanSelector(),
             **({
                 vol.Optional(OPT_LEGIONELLA_TEMP, default=_n(OPT_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)): NumberSelector(
                     NumberSelectorConfig(min=60, max=80, step=1, unit_of_measurement="°C", mode=NumberSelectorMode.BOX)
