@@ -1,7 +1,7 @@
 """Constants for the Heat Pump DHW integration."""
 
 DOMAIN = "heatpump_dhw"
-PLATFORMS = ["sensor", "switch", "number", "button"]
+PLATFORMS = ["sensor", "switch", "number"]
 
 # Config keys — hardware sensors
 CONF_BOILER_TEMP_SENSOR = "boiler_temp_sensor"

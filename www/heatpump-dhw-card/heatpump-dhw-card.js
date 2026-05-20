@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.12
+ * Heat Pump DHW Card — v2.13
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -11,7 +11,6 @@
  *   session_kwh_sensor: sensor.dhw_session_kwh
  *   session_cost_sensor: sensor.dhw_session_cost
  *   next_heating_sensor: sensor.dhw_next_heating
- *   heat_up_sensor: sensor.dhw_heat_up_duration_min  # optioneel
  *   price_forecast_sensor: sensor.dynamic_electricity_price  # voor prijsgrafiek
  *   target_temp_sensor: number.boiler_setpoint  # optioneel, doeltemperatuur
  *   cheap_hours: 2                      # optioneel, goedkoopste blokken markeren in grafiek
@@ -104,11 +103,6 @@ class HeatpumpDhwCard extends HTMLElement {
     if (!id || !this._hass) return;
     const svc = this._state(id) === "on" ? "turn_off" : "turn_on";
     await this._hass.callService("switch", svc, { entity_id: id });
-  }
-
-  async _pressButton(id) {
-    if (!id || !this._hass) return;
-    await this._hass.callService("button", "press", { entity_id: id });
   }
 
   // ── Price forecast parser (handles Zonneplan, Nordpool, Tibber, generic) ──
@@ -318,7 +312,6 @@ class HeatpumpDhwCard extends HTMLElement {
     const kwh        = this._state(c.session_kwh_sensor);
     const cost       = this._state(c.session_cost_sensor);
     const nextStr    = this._state(c.next_heating_sensor);
-    const heatUp     = this._state(c.heat_up_sensor);
 
     const isHeating  = HEATING_MODES.has(mode);
     const modeColor  = MODE_COLORS[mode] || "#6b7280";
@@ -476,7 +469,6 @@ class HeatpumpDhwCard extends HTMLElement {
       session_kwh_sensor: "sensor.dhw_session_kwh",
       session_cost_sensor: "sensor.dhw_session_cost",
       next_heating_sensor: "sensor.dhw_next_heating",
-      heat_up_sensor: "sensor.dhw_heat_up_duration_min",
       price_forecast_sensor: "sensor.dynamic_electricity_price",
       target_temp_sensor: "",
       cheap_hours: 2,
