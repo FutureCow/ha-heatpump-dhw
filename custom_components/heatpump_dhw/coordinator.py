@@ -341,6 +341,19 @@ class DHWCoordinator(DataUpdateCoordinator):
             if self._year_start_meter is None:
                 self._year_start_meter = meter_kwh
 
+        # Sync internal heating state with actual switch to detect external on/off
+        # (defrost controller, manual intervention, power loss, etc.)
+        hp_switch = self.cfg.get(CONF_HEATPUMP_SWITCH)
+        if hp_switch:
+            actual_on = self._state_bool(hp_switch)
+            if actual_on is not None and actual_on != self._heating:
+                _LOGGER.info(
+                    "DHW: warmtepomp schakelaar extern gewijzigd naar %s — sync state",
+                    "aan" if actual_on else "uit",
+                )
+                self._heating = actual_on
+                self._last_switch_time = now  # anti-short-cycle before re-switching
+
         desired_mode, desired_temp = self._decide_mode(
             now, boiler_temp, surplus_w, price_eur, present
         )
@@ -759,14 +772,13 @@ class DHWCoordinator(DataUpdateCoordinator):
         predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
         skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
         if self.price_mode_enabled and not skip_predictive:
+            # at_target: boiler has enough heat to stop (accounts for setpoint offset)
             at_target = boiler_temp is not None and boiler_temp >= normal_temp - self._effective_hysteresis()
-            if at_target:
-                # Reset planning only when pump is already off — prevents a transient
-                # temperature reading (e.g. during a defrost cycle) from discarding the
-                # current planning and forcing a wait until the next cheap slot.
-                if not self._heating:
-                    self._price_mode_n = 0
-            else:
+            # at_target_done: boiler truly finished — only then clear the planning
+            at_target_done = boiler_temp is not None and boiler_temp >= normal_temp - TEMP_HYSTERESIS
+            if at_target_done and not self._heating:
+                self._price_mode_n = 0
+            if not at_target:
                 # Fix n at start of planning cycle so rising boiler temp doesn't shrink
                 # the cheap-hour selection mid-session
                 if self._price_mode_n == 0:
