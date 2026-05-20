@@ -749,8 +749,11 @@ class DHWCoordinator(DataUpdateCoordinator):
         if self.price_mode_enabled and not skip_predictive:
             at_target = boiler_temp is not None and boiler_temp >= normal_temp - self._effective_hysteresis()
             if at_target:
-                # Boiler at target — reset planning so n is recalculated when it cools
-                self._price_mode_n = 0
+                # Reset planning only when pump is already off — prevents a transient
+                # temperature reading (e.g. during a defrost cycle) from discarding the
+                # current planning and forcing a wait until the next cheap slot.
+                if not self._heating:
+                    self._price_mode_n = 0
             else:
                 # Fix n at start of planning cycle so rising boiler temp doesn't shrink
                 # the cheap-hour selection mid-session
