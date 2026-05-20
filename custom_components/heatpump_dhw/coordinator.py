@@ -335,40 +335,11 @@ class DHWCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> dict[str, Any]:
         now = dt_util.now()
 
-        boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
-        power_w = self._state_watts(self.cfg.get(CONF_POWER_SENSOR))
-        meter_kwh = self._state_float(self.cfg.get(CONF_ENERGY_METER_SENSOR))
-        surplus_w = self._state_watts(self.cfg.get(CONF_PV_SURPLUS_SENSOR))
-        price_eur = self._state_float(self.cfg.get(CONF_DYNAMIC_PRICE_SENSOR))
-        outside_temp = self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR))
-        present = self._state_bool(self.cfg.get(CONF_PRESENCE_SENSOR))
-
-        # Initialize energy meter start values on first reading.
-        # If the stored start meter is missing (first run or store corruption),
-        # reconstruct it from the stored accumulated kWh to avoid losing the
-        # current month/year total.
-        if meter_kwh is not None:
-            if self._month_start_meter is None:
-                self._month_start_meter = (
-                    meter_kwh - self._monthly_kwh if self._monthly_kwh > 0 else meter_kwh
-                )
-            if self._year_start_meter is None:
-                self._year_start_meter = (
-                    meter_kwh - self._yearly_kwh if self._yearly_kwh > 0 else meter_kwh
-                )
-
-        # Sync internal heating state with actual switch to detect external on/off
-        # (defrost controller, manual intervention, power loss, etc.)
-        hp_switch = self.cfg.get(CONF_HEATPUMP_SWITCH)
-        if hp_switch:
-            actual_on = self._state_bool(hp_switch)
-            if actual_on is not None and actual_on != self._heating:
-                _LOGGER.info(
-                    "DHW: warmtepomp schakelaar extern gewijzigd naar %s — sync state",
-                    "aan" if actual_on else "uit",
-                )
-                self._heating = actual_on
-                self._last_switch_time = now  # anti-short-cycle before re-switching
+        boiler_temp, power_w, meter_kwh, surplus_w, price_eur, outside_temp, present = (
+            self._read_sensors()
+        )
+        self._init_meter_baselines(meter_kwh)
+        self._sync_switch_state(now)
 
         desired_mode, desired_temp = self._decide_mode(
             now, boiler_temp, surplus_w, price_eur, present
@@ -377,7 +348,6 @@ class DHWCoordinator(DataUpdateCoordinator):
         await self._track_session(boiler_temp, power_w, price_eur, outside_temp, meter_kwh, now)
         await self._apply_control(desired_mode, desired_temp, boiler_temp, power_w, meter_kwh, now)
 
-        # Update meter prev after track_session has used it
         self._energy_meter_prev = meter_kwh
         self._learn_heat_loss(boiler_temp, now, outside_temp)
         await self._check_shower_readiness(now, boiler_temp)
@@ -385,6 +355,64 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._next_heating = self._calc_next_heating(now)
         self._planned_slots = self._calc_planned_slots(now)
 
+        self._handle_period_resets(meter_kwh, now)
+        await self._save_state()
+
+        return self._build_data_dict(
+            boiler_temp, power_w, surplus_w, price_eur, outside_temp,
+            desired_mode, desired_temp, meter_kwh,
+        )
+
+    def _read_sensors(self) -> tuple:
+        """Read all HA sensor states and return them as a tuple."""
+        return (
+            self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR)),
+            self._state_watts(self.cfg.get(CONF_POWER_SENSOR)),
+            self._state_float(self.cfg.get(CONF_ENERGY_METER_SENSOR)),
+            self._state_watts(self.cfg.get(CONF_PV_SURPLUS_SENSOR)),
+            self._state_float(self.cfg.get(CONF_DYNAMIC_PRICE_SENSOR)),
+            self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR)),
+            self._state_bool(self.cfg.get(CONF_PRESENCE_SENSOR)),
+        )
+
+    def _init_meter_baselines(self, meter_kwh: float | None) -> None:
+        """Set month/year meter baselines on first reading.
+
+        Reconstructs from stored accumulated kWh when the start value is missing
+        (first run or store corruption) to avoid resetting the running total.
+        """
+        if meter_kwh is None:
+            return
+        if self._month_start_meter is None:
+            self._month_start_meter = (
+                meter_kwh - self._monthly_kwh if self._monthly_kwh > 0 else meter_kwh
+            )
+        if self._year_start_meter is None:
+            self._year_start_meter = (
+                meter_kwh - self._yearly_kwh if self._yearly_kwh > 0 else meter_kwh
+            )
+
+    def _sync_switch_state(self, now: datetime) -> None:
+        """Sync self._heating with the actual hardware switch state.
+
+        Detects external changes (defrost, manual override, power loss) and
+        sets the anti-short-cycle timer so the coordinator doesn't immediately
+        counter the external action.
+        """
+        hp_switch = self.cfg.get(CONF_HEATPUMP_SWITCH)
+        if not hp_switch:
+            return
+        actual_on = self._state_bool(hp_switch)
+        if actual_on is not None and actual_on != self._heating:
+            _LOGGER.info(
+                "DHW: warmtepomp schakelaar extern gewijzigd naar %s — sync state",
+                "aan" if actual_on else "uit",
+            )
+            self._heating = actual_on
+            self._last_switch_time = now
+
+    def _handle_period_resets(self, meter_kwh: float | None, now: datetime) -> None:
+        """Reset monthly/yearly accumulators on rollover and sync kWh with the live meter."""
         if now.month != self._monthly_month:
             _LOGGER.debug(
                 "DHW: maandelijkse reset (opgeslagen maand=%s, huidige maand=%s, kosten voor reset=%.3f)",
@@ -404,17 +432,24 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._yearly_year = now.year
             self._year_start_meter = meter_kwh
 
-        # Keep accumulated kWh in sync with the live meter reading so the Store
-        # always reflects what is displayed — critical when the meter sensor
-        # becomes temporarily unavailable after a restart (fallback stays accurate).
         if meter_kwh is not None:
             if self._month_start_meter is not None:
                 self._monthly_kwh = max(0.0, meter_kwh - self._month_start_meter)
             if self._year_start_meter is not None:
                 self._yearly_kwh = max(0.0, meter_kwh - self._year_start_meter)
 
-        await self._save_state()
-
+    def _build_data_dict(
+        self,
+        boiler_temp: float | None,
+        power_w: float | None,
+        surplus_w: float | None,
+        price_eur: float | None,
+        outside_temp: float | None,
+        desired_mode: str,
+        desired_temp: float,
+        meter_kwh: float | None,
+    ) -> dict[str, Any]:
+        """Build the data dictionary returned to HA sensor/switch entities."""
         return {
             "boiler_temp": boiler_temp,
             "power_w": power_w,
@@ -450,7 +485,9 @@ class DHWCoordinator(DataUpdateCoordinator):
                 float(self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)), outside_temp
             ), 2) if self._loss_samples else None,
             "learned_heat_rate": round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None,
-            "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp, desired_temp),
+            "status_text": self._build_status_text(
+                boiler_temp, surplus_w, price_eur, outside_temp, desired_temp
+            ),
         }
 
     def _learn_heat_loss(self, boiler_temp: float | None, now: datetime, outside_temp: float | None) -> None:
