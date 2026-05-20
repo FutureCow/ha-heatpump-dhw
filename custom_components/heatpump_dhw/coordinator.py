@@ -37,6 +37,7 @@ from .const import (
     DEFAULT_BOILER_SETPOINT_OFFSET,
     DEFAULT_PRICE_MODE_CONSECUTIVE,
     DEFAULT_PRICE_WINDOW_HOURS,
+    DEFAULT_AMBIENT_TEMP,
     DEFAULT_TANK_LOSS_RATE,
     DEFAULT_BOOST_THRESHOLD_W,
     DEFAULT_LEGIONELLA_DAY,
@@ -173,7 +174,10 @@ class DHWCoordinator(DataUpdateCoordinator):
         stored = await self._store.async_load() or {}
         self._heat_up_samples = stored.get("heat_up_samples", [])
         self._cop_samples = stored.get("cop_samples", [])
-        self._loss_samples = stored.get("loss_samples", [])
+        # loss_samples now stores normalised k values (°C/h per °C ΔT).
+        # Discard old raw °C/h values (>0.5 indicates pre-normalisation format).
+        raw_loss = stored.get("loss_samples", [])
+        self._loss_samples = [v for v in raw_loss if v < 0.5]
         self._heat_rate_samples = stored.get("heat_rate_samples", [])
         raw_ll = stored.get("last_legionella_run")
         self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
@@ -331,7 +335,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # Update meter prev after track_session has used it
         self._energy_meter_prev = meter_kwh
-        self._learn_heat_loss(boiler_temp, now)
+        self._learn_heat_loss(boiler_temp, now, outside_temp)
         await self._check_shower_readiness(now, boiler_temp)
 
         self._next_heating = self._calc_next_heating(now)
@@ -389,13 +393,19 @@ class DHWCoordinator(DataUpdateCoordinator):
                 else round(self._yearly_kwh, 3)
             ),
             "yearly_cost": round(self._yearly_cost, 2),
-            "learned_loss_rate": round(mean(self._loss_samples), 2) if self._loss_samples else None,
+            "learned_loss_rate": round(self._loss_rate_at(
+                float(self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)), outside_temp
+            ), 2) if self._loss_samples else None,
             "learned_heat_rate": round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None,
             "status_text": self._build_status_text(boiler_temp, surplus_w, price_eur, outside_temp, desired_temp),
         }
 
-    def _learn_heat_loss(self, boiler_temp: float | None, now: datetime) -> None:
-        """Measure tank heat loss rate during idle periods and update rolling average."""
+    def _learn_heat_loss(self, boiler_temp: float | None, now: datetime, outside_temp: float | None) -> None:
+        """Measure normalised heat loss coefficient k (°C/h per °C ΔT above ambient).
+
+        Storing k instead of a raw °C/h rate corrects for the temperature dependency
+        of heat loss (Newton's law of cooling): loss ∝ (T_water − T_ambient).
+        """
         if self._heating or boiler_temp is None:
             self._last_idle_temp = None
             self._last_idle_time = None
@@ -410,13 +420,29 @@ class DHWCoordinator(DataUpdateCoordinator):
         if elapsed_hours >= 0.5:
             drop = self._last_idle_temp - boiler_temp
             if drop > 0:
-                rate = drop / elapsed_hours
-                if 0.05 <= rate <= 3.0:
-                    self._loss_samples.append(rate)
-                    if len(self._loss_samples) > HEAT_UP_SAMPLE_SIZE:
-                        self._loss_samples.pop(0)
+                rate = drop / elapsed_hours  # °C/h at current temperatures
+                avg_temp = (self._last_idle_temp + boiler_temp) / 2
+                ambient = outside_temp if outside_temp is not None else DEFAULT_AMBIENT_TEMP
+                delta_t = avg_temp - ambient
+                if delta_t > 5.0:  # only normalise when ΔT is meaningful
+                    k = rate / delta_t  # °C/h per °C ΔT
+                    if 0.001 <= k <= 0.15:  # sanity: ~0.04 typical well-insulated tank
+                        self._loss_samples.append(k)
+                        if len(self._loss_samples) > HEAT_UP_SAMPLE_SIZE:
+                            self._loss_samples.pop(0)
             self._last_idle_temp = boiler_temp
             self._last_idle_time = now
+
+    def _loss_rate_at(self, temp: float, outside_temp: float | None) -> float:
+        """Return heat loss rate (°C/h) at given water temperature."""
+        ambient = outside_temp if outside_temp is not None else DEFAULT_AMBIENT_TEMP
+        if self._loss_samples:
+            k = mean(self._loss_samples)
+        else:
+            # Default k derived from configured flat rate at 55°C reference
+            default_rate = float(self._opt(OPT_TANK_LOSS_RATE, DEFAULT_TANK_LOSS_RATE))
+            k = default_rate / max(1.0, 55.0 - DEFAULT_AMBIENT_TEMP)
+        return k * max(0.0, temp - ambient)
 
     # ------------------------------------------------------------------
     # Price forecast helpers
@@ -808,7 +834,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         Returns (slot_start, target_temp) or (None, required_temp) if no forecast.
         """
         window_hours = self._effective_window_hours()
-        loss_rate = mean(self._loss_samples) if self._loss_samples else float(self._opt(OPT_TANK_LOSS_RATE, DEFAULT_TANK_LOSS_RATE))
+        outside_temp = self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR))
         boost_temp = self._opt(OPT_BOOST_TEMP, DEFAULT_BOOST_TEMP)
 
         all_prices = self._get_forecast_prices(now, hours=window_hours)
@@ -840,6 +866,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         # Buffer only for the gap between end of LAST heating and shower
         heat_end = best_t + timedelta(minutes=heat_up_min)
         hours_gap = max(0.0, (shower_dt - heat_end).total_seconds() / 3600)
+        loss_rate = self._loss_rate_at(required_temp, outside_temp)
         buffer = min(hours_gap * loss_rate, 8.0)  # cap at 8 °C
         target = round(min(required_temp + buffer, boost_temp), 1)
 
