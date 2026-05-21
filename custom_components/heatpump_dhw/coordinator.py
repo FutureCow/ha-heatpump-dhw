@@ -912,9 +912,10 @@ class DHWCoordinator(DataUpdateCoordinator):
                 consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
 
                 if consecutive:
-                    # Consecutive block: find cheapest n-hour window, heat continuously
-                    if self._heating and self._active_mode == MODE_PRICE:
-                        return MODE_PRICE, normal_temp
+                    # Consecutive block: heat during the cheapest n-hour window.
+                    # _in_cheapest_block handles "stay on while inside the block" —
+                    # no separate heating guard needed (that guard prevented stopping
+                    # after the block ended).
                     if n > 0 and self._in_cheapest_block(now, n):
                         return MODE_PRICE, normal_temp
                     # Threshold fallback when no forecast available
