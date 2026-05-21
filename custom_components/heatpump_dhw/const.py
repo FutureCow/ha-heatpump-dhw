@@ -50,6 +50,7 @@ OPT_PRICE_WINDOW_HOURS = "price_window_hours"
 OPT_TANK_LOSS_RATE = "tank_loss_rate"
 OPT_PRICE_MODE_CONSECUTIVE = "price_mode_consecutive"
 OPT_BOILER_SETPOINT_OFFSET = "boiler_setpoint_offset"
+OPT_PREHEAT_TEMP = "preheat_temp"
 
 # Default option values
 DEFAULT_SOLAR_THRESHOLD_W = 500
@@ -71,6 +72,7 @@ DEFAULT_TANK_LOSS_RATE = 0.5
 DEFAULT_AMBIENT_TEMP = 18.0  # assumed ambient (°C) when no outside sensor available
 DEFAULT_PRICE_MODE_CONSECUTIVE = False
 DEFAULT_BOILER_SETPOINT_OFFSET = 0.0
+DEFAULT_PREHEAT_TEMP = 40.0
 
 # Heating modes
 MODE_IDLE = "idle"
