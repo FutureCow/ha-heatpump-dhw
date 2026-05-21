@@ -121,6 +121,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._session_start_temp: float | None = None
         self._session_start_meter: float | None = None
         self._last_session: dict = {}
+        self._session_notified: bool = False
 
         # Energy meter tracking
         self._energy_meter_prev: float | None = None
@@ -349,7 +350,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             now, boiler_temp, surplus_w, price_eur, present
         )
 
-        await self._track_session(boiler_temp, power_w, price_eur, outside_temp, meter_kwh, now)
+        await self._track_session(boiler_temp, power_w, price_eur, outside_temp, meter_kwh, now, desired_temp)
         await self._apply_control(desired_mode, desired_temp, boiler_temp, power_w, meter_kwh, now)
 
         self._energy_meter_prev = meter_kwh
@@ -1273,11 +1274,14 @@ class DHWCoordinator(DataUpdateCoordinator):
                 self._session_start_meter = meter_kwh
                 self._energy_meter_prev = meter_kwh
                 self._last_session = {"running_kwh": 0.0, "running_cost": 0.0}
+                self._session_notified = False
                 _LOGGER.info("DHW: start heating mode=%s target=%.1f°C", mode, desired_temp)
                 await self._notify(f"Boiler verwarming gestart ({mode}), doel: {desired_temp:.0f}°C")
             else:
                 await self._turn_off_heatpump()
                 _LOGGER.info("DHW: stop heating previous_mode=%s", prev_mode)
+                self._last_session["running_kwh"] = 0.0
+                self._last_session["running_cost"] = 0.0
                 if prev_mode == MODE_LEGIONELLA:
                     self._last_legionella_run = now
                     await self._notify("Legionella preventie run voltooid.")
@@ -1377,6 +1381,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         outside_temp: float | None,
         meter_kwh: float | None,
         now: datetime,
+        desired_temp: float = 0.0,
     ) -> None:
         if not self._heating or self._session_start is None:
             return
@@ -1415,9 +1420,16 @@ class DHWCoordinator(DataUpdateCoordinator):
             thermal_kwh = tank_vol * WATER_SPECIFIC_HEAT_KJ * (boiler_temp - start_temp) / 3600
             sess["cop"] = round(thermal_kwh / sess["running_kwh"], 2)
 
-        # Session complete when boiler reaches target (use same hysteresis as decide_mode)
-        target_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
-        if boiler_temp is not None and boiler_temp >= target_temp - self._effective_hysteresis():
+        # Session complete when boiler reaches the active target temperature.
+        # Use desired_temp (actual mode target) so legionella/boost runs don't
+        # fire prematurely at normal_temp while still heating toward a higher goal.
+        target_temp = desired_temp if desired_temp > 0 else self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
+        if (
+            not self._session_notified
+            and boiler_temp is not None
+            and boiler_temp >= target_temp - self._effective_hysteresis()
+        ):
+            self._session_notified = True
             duration_min = (now - self._session_start).total_seconds() / 60
             self._heat_up_samples.append(duration_min)
             if len(self._heat_up_samples) > HEAT_UP_SAMPLE_SIZE:
@@ -1450,8 +1462,6 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "DHW session: %.2f kWh, €%.3f, COP=%s, %.1f min heat-up",
                 sess["running_kwh"], sess["running_cost"], final_cop, duration_min,
             )
-            sess["running_kwh"] = 0.0
-            sess["running_cost"] = 0.0
 
     # ------------------------------------------------------------------
     # Shower readiness warning
