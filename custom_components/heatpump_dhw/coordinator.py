@@ -702,12 +702,14 @@ class DHWCoordinator(DataUpdateCoordinator):
         """Calculate how many cheap hours are needed based on learned heating rate."""
         if boiler_temp is None or boiler_temp >= target_temp - self._effective_hysteresis():
             return 0
+        delta = max(0.0, target_temp - boiler_temp)
         if self._heat_rate_samples:
             rate = mean(self._heat_rate_samples)  # °C/hour
-            return max(1, math.ceil((target_temp - boiler_temp) / rate))
-        # Fallback to configured value before enough data is learned
-        configured = int(self._opt(OPT_CHEAP_HOURS, DEFAULT_CHEAP_HOURS))
-        return configured if configured > 0 else DEFAULT_CHEAP_HOURS
+            return max(1, math.ceil(delta / rate))
+        # No rate data yet: estimate at a conservative 5 °C/h (typical heat-pump DHW rate).
+        # Do NOT use the user-configured OPT_CHEAP_HOURS here — that is a global budget,
+        # not a physical heat-up duration, and leads to absurd values (e.g. 6 h for 11 °C).
+        return max(1, math.ceil(delta / 5.0))
 
     def _effective_window_hours(self) -> int:
         """Return the configured price window; 0 means use all available data (168h)."""
