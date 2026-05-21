@@ -1030,8 +1030,11 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # Normal case: data covers the planning window — pick the cheapest slot.
         cheap_n = self._needed_cheap_hours(boiler_temp, required_temp)
+        # Only rank future prices — past hours must not crowd out present cheap slots.
         cheapest_times = {
-            t for t, _ in sorted(all_prices, key=lambda x: x[1])[:cheap_n]
+            t for t, _ in sorted(
+                [(t, p) for t, p in all_prices if t >= now], key=lambda x: x[1]
+            )[:cheap_n]
         }
 
         # Prefer the LAST cheap slot before the shower — buffer only needed for that gap.
