@@ -1061,6 +1061,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
         window_hours = self._effective_window_hours()
+        # Control decisions only matter for showers within 48 h — beyond that the
+        # optimal slot can never be 'now', so extra iterations are always no-ops.
+        check_hours = min(window_hours, 48)
 
         for sched in schedules:
             days = sched.get("days", list(range(7)))
@@ -1068,14 +1071,14 @@ class DHWCoordinator(DataUpdateCoordinator):
             required_temp = sched.get("temp", normal_temp)
 
             # Collect all shower occurrences within the look-ahead window
-            for day_offset in range(int(window_hours / 24) + 2):
+            for day_offset in range(int(check_hours / 24) + 2):
                 candidate = now + timedelta(days=day_offset)
                 if candidate.weekday() not in days:
                     continue
                 shower_dt = datetime.combine(candidate.date(), shower_time, tzinfo=now.tzinfo)
                 if shower_dt <= now:
                     continue
-                if (shower_dt - now).total_seconds() / 3600 > window_hours:
+                if (shower_dt - now).total_seconds() / 3600 > check_hours:
                     continue
 
                 # Try price-optimal slot first
