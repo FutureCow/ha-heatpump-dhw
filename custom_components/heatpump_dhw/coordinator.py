@@ -53,6 +53,8 @@ from .const import (
     DEFAULT_VACATION_MIN_TEMP,
     OPT_CHEAP_HOURS,
     OPT_BOILER_SETPOINT_OFFSET,
+    OPT_PREHEAT_TEMP,
+    DEFAULT_PREHEAT_TEMP,
     OPT_PRICE_MODE_CONSECUTIVE,
     OPT_PRICE_WINDOW_HOURS,
     OPT_TANK_LOSS_RATE,
@@ -712,6 +714,38 @@ class DHWCoordinator(DataUpdateCoordinator):
         w = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
         return 168 if w == 0 else w
 
+    def _effective_price_target(self, now: datetime, normal_temp: float) -> float:
+        """Return the price-mode target temperature.
+
+        When shower schedules are configured and the next shower is more than 12 h away,
+        the price mode pre-heats to preheat_temp only.  The shower schedule handles the
+        final push to normal_temp closer to the deadline, minimising tank losses.
+        """
+        preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
+        if preheat_temp >= normal_temp:
+            return normal_temp
+
+        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
+        if not schedules:
+            return normal_temp
+
+        for sched in schedules:
+            days = sched.get("days", list(range(7)))
+            shower_time = dt_time.fromisoformat(sched.get("time", "07:30"))
+            for day_offset in range(3):
+                candidate = now + timedelta(days=day_offset)
+                if candidate.weekday() not in days:
+                    continue
+                shower_dt = datetime.combine(candidate.date(), shower_time, tzinfo=now.tzinfo)
+                if shower_dt <= now:
+                    continue
+                hours_until = (shower_dt - now).total_seconds() / 3600
+                if hours_until <= 12.0:
+                    return normal_temp  # shower is close — heat to full target
+                return preheat_temp    # shower is far — pre-heat to lower target
+
+        return normal_temp
+
     def _is_cheap_slot(self, now: datetime, n_hours: int) -> bool:
         """Return True if the current price slot is among the cheapest n_hours worth.
 
@@ -896,17 +930,20 @@ class DHWCoordinator(DataUpdateCoordinator):
         predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
         skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
         if self.price_mode_enabled and not self._vacation_active and not skip_predictive:
+            # When a shower is scheduled >12 h away, only pre-heat to preheat_temp to
+            # minimise tank losses.  The shower schedule handles the final push.
+            price_target = self._effective_price_target(now, normal_temp)
             # at_target: boiler has enough heat to stop (accounts for setpoint offset)
-            at_target = boiler_temp is not None and boiler_temp >= normal_temp - self._effective_hysteresis()
+            at_target = boiler_temp is not None and boiler_temp >= price_target - self._effective_hysteresis()
             # at_target_done: boiler truly finished — only then clear the planning
-            at_target_done = boiler_temp is not None and boiler_temp >= normal_temp - TEMP_HYSTERESIS
+            at_target_done = boiler_temp is not None and boiler_temp >= price_target - TEMP_HYSTERESIS
             if at_target_done and not self._heating:
                 self._price_mode_n = 0
             if not at_target:
                 # Fix n at start of planning cycle so rising boiler temp doesn't shrink
                 # the cheap-hour selection mid-session
                 if self._price_mode_n == 0:
-                    self._price_mode_n = self._needed_cheap_hours(boiler_temp, normal_temp)
+                    self._price_mode_n = self._needed_cheap_hours(boiler_temp, price_target)
                 n = self._price_mode_n
                 price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
                 consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
@@ -917,10 +954,10 @@ class DHWCoordinator(DataUpdateCoordinator):
                     # no separate heating guard needed (that guard prevented stopping
                     # after the block ended).
                     if n > 0 and self._in_cheapest_block(now, n):
-                        return MODE_PRICE, normal_temp
+                        return MODE_PRICE, price_target
                     # Threshold fallback when no forecast available
                     if price_eur is not None and price_eur <= price_threshold:
-                        return MODE_PRICE, normal_temp
+                        return MODE_PRICE, price_target
                 else:
                     # Non-consecutive: heat during each of the cheapest n hours individually
                     use_forecast = n > 0 and self._is_cheap_slot(now, n)
@@ -930,7 +967,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                         and price_eur <= price_threshold
                     )
                     if use_forecast or use_threshold:
-                        return MODE_PRICE, normal_temp
+                        return MODE_PRICE, price_target
 
         # 7. Shower schedule — skip during vacation (no one home to shower)
         if not self._vacation_active:
