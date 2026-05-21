@@ -122,6 +122,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._session_start_meter: float | None = None
         self._last_session: dict = {}
         self._session_notified: bool = False
+        self._last_set_temp: float | None = None
 
         # Energy meter tracking
         self._energy_meter_prev: float | None = None
@@ -1289,8 +1290,10 @@ class DHWCoordinator(DataUpdateCoordinator):
                     self._last_pump_run = now
 
         elif should_heat and mode != prev_mode:
-            # Mode changed while heating — update target temp and eheater state
-            await self._set_target_temp(desired_temp)
+            # Mode changed while heating — update target temp and eheater state only
+            # when values actually change, to prevent rapid service calls on sensor flapping.
+            if desired_temp != self._last_set_temp:
+                await self._set_target_temp(desired_temp)
             if mode == MODE_BOOST:
                 await self._set_eheater(True, desired_temp)
             elif prev_mode == MODE_BOOST:
@@ -1329,6 +1332,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             await self.hass.services.async_call(
                 domain, "set_value", {"entity_id": entity_id, "value": temp}, blocking=True
             )
+            self._last_set_temp = temp
         except Exception as err:
             _LOGGER.warning("DHW: kon doeltemperatuur niet instellen op %s: %s", entity_id, err)
 
