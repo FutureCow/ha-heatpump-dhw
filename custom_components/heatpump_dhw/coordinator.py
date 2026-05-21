@@ -846,31 +846,54 @@ class DHWCoordinator(DataUpdateCoordinator):
             if boiler_temp is None or boiler_temp < leg_temp - self._effective_hysteresis():
                 return MODE_LEGIONELLA, leg_temp
 
-        # 3. Boost — very large solar surplus
+        # 3. Vacation status — detect before boost/solar/price so those modes respect it
+        if self.vacation_mode_enabled and not self._vacation_manual:
+            absence_hours = self._opt(OPT_VACATION_ABSENCE_HOURS, DEFAULT_VACATION_ABSENCE_HOURS)
+            if present is True:
+                self._absence_start = None
+                self._vacation_active = False
+            elif present is False:
+                if self._absence_start is None:
+                    self._absence_start = now
+            absent_long_enough = (
+                self._absence_start is not None
+                and (now - self._absence_start).total_seconds() / 3600 >= absence_hours
+            )
+            if absent_long_enough:
+                self._vacation_active = True
+        elif not self.vacation_mode_enabled and not self._vacation_manual:
+            self._absence_start = None
+            self._vacation_active = False
+
+        min_temp = self._opt(OPT_VACATION_MIN_TEMP, DEFAULT_VACATION_MIN_TEMP)
+
+        # 4. Boost — very large solar surplus; skip during vacation
         boost_threshold = self._opt(OPT_BOOST_THRESHOLD_W, DEFAULT_BOOST_THRESHOLD_W)
         boost_temp = self._opt(OPT_BOOST_TEMP, DEFAULT_BOOST_TEMP)
         if (
             self.boost_mode_enabled
+            and not self._vacation_active
             and surplus_w is not None
             and surplus_w >= boost_threshold
             and (boiler_temp is None or boiler_temp < boost_temp - self._effective_hysteresis())
         ):
             return MODE_BOOST, boost_temp
 
-        # 4. Solar — moderate surplus
+        # 5. Solar — moderate surplus; during vacation cap target to min_temp (free energy)
         solar_threshold = self._opt(OPT_SOLAR_THRESHOLD_W, DEFAULT_SOLAR_THRESHOLD_W)
+        solar_target = min_temp if self._vacation_active else normal_temp
         if (
             self.solar_mode_enabled
             and surplus_w is not None
             and surplus_w >= solar_threshold
-            and (boiler_temp is None or boiler_temp < normal_temp - self._effective_hysteresis())
+            and (boiler_temp is None or boiler_temp < solar_target - self._effective_hysteresis())
         ):
-            return MODE_SOLAR, normal_temp
+            return MODE_SOLAR, solar_target
 
-        # 5. Dynamic price — use cheapest-hours forecast when available, else threshold
+        # 6. Dynamic price — use cheapest-hours forecast when available, else threshold; skip during vacation
         predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
         skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
-        if self.price_mode_enabled and not skip_predictive:
+        if self.price_mode_enabled and not self._vacation_active and not skip_predictive:
             # at_target: boiler has enough heat to stop (accounts for setpoint offset)
             at_target = boiler_temp is not None and boiler_temp >= normal_temp - self._effective_hysteresis()
             # at_target_done: boiler truly finished — only then clear the planning
@@ -906,27 +929,6 @@ class DHWCoordinator(DataUpdateCoordinator):
                     if use_forecast or use_threshold:
                         return MODE_PRICE, normal_temp
 
-        # 6. Vacation status — determined early so shower schedule can be skipped
-        # Auto-detectie: alleen als "Vakantie modus" feature aan staat én niet handmatig ingesteld
-        if self.vacation_mode_enabled and not self._vacation_manual:
-            absence_hours = self._opt(OPT_VACATION_ABSENCE_HOURS, DEFAULT_VACATION_ABSENCE_HOURS)
-            if present is True:
-                self._absence_start = None
-                self._vacation_active = False
-            elif present is False:
-                if self._absence_start is None:
-                    self._absence_start = now
-            absent_long_enough = (
-                self._absence_start is not None
-                and (now - self._absence_start).total_seconds() / 3600 >= absence_hours
-            )
-            if absent_long_enough:
-                self._vacation_active = True
-        elif not self.vacation_mode_enabled and not self._vacation_manual:
-            # Feature uitgeschakeld en niet handmatig: reset
-            self._absence_start = None
-            self._vacation_active = False
-
         # 7. Shower schedule — skip during vacation (no one home to shower)
         if not self._vacation_active:
             schedule_mode, schedule_temp = self._check_schedule(now, boiler_temp)
@@ -935,7 +937,6 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # 8. Vacation — hold minimum temperature
         if self._vacation_active:
-            min_temp = self._opt(OPT_VACATION_MIN_TEMP, DEFAULT_VACATION_MIN_TEMP)
             if boiler_temp is None or boiler_temp < min_temp - self._effective_hysteresis():
                 return MODE_VACATION, min_temp
 
