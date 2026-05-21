@@ -154,6 +154,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         self._manual_heat: bool = False
         self._manual_heat_start_temp: float | None = None  # boilertemp bij activatie
+        self._manual_heat_since: datetime | None = None   # tijdstip van activatie
         self._price_mode_n: int = 0  # cheap-hour count fixed at start of planning cycle
 
         # Absence tracking for delayed vacation mode
@@ -178,8 +179,11 @@ class DHWCoordinator(DataUpdateCoordinator):
     @manual_heat_enabled.setter
     def manual_heat_enabled(self, value: bool) -> None:
         self._manual_heat = value
-        if not value:
+        if value:
+            self._manual_heat_since = dt_util.now()
+        else:
             self._manual_heat_start_temp = None
+            self._manual_heat_since = None
 
     # ------------------------------------------------------------------
     # Setup / teardown
@@ -791,9 +795,6 @@ class DHWCoordinator(DataUpdateCoordinator):
             # Leg starttemperatuur vast op eerste tick na activatie
             if boiler_temp is not None and self._manual_heat_start_temp is None:
                 self._manual_heat_start_temp = boiler_temp
-            # Auto-reset alleen als boiler écht omhoog is gegaan van koud naar doel.
-            # Was de boiler al warm bij activatie, dan blijft de schakelaar aan totdat
-            # de gebruiker hem zelf uitzet — anders gaat hij meteen terug naar "off".
             start_was_below = (
                 self._manual_heat_start_temp is not None
                 and self._manual_heat_start_temp < normal_temp - TEMP_HYSTERESIS
@@ -802,9 +803,24 @@ class DHWCoordinator(DataUpdateCoordinator):
                 boiler_temp is not None
                 and boiler_temp >= normal_temp - TEMP_HYSTERESIS
             )
-            if start_was_below and reached_target:
+            # Safety timeout: als de boiler na 4 uur nog steeds onder de doeltemperatuur
+            # staat, is er waarschijnlijk iets mis (storing, stroomuitval). Reset dan
+            # automatisch zodat Legionella en andere veiligheidsmodi niet geblokkeerd blijven.
+            timed_out = (
+                self._manual_heat_since is not None
+                and (now - self._manual_heat_since).total_seconds() > 4 * 3600
+                and not reached_target
+            )
+            if timed_out:
+                _LOGGER.warning(
+                    "DHW: handmatige modus timeout na 4u, boiler %.1f°C < %.1f°C — auto-reset",
+                    boiler_temp if boiler_temp is not None else -99,
+                    normal_temp - TEMP_HYSTERESIS,
+                )
+            if (start_was_below and reached_target) or timed_out:
                 self._manual_heat = False
                 self._manual_heat_start_temp = None
+                self._manual_heat_since = None
             else:
                 return MODE_MANUAL, normal_temp
 
