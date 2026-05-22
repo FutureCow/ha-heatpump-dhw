@@ -947,14 +947,22 @@ class DHWCoordinator(DataUpdateCoordinator):
                 if self._price_mode_n == 0:
                     self._price_mode_n = self._needed_cheap_hours(boiler_temp, price_target)
                 n = self._price_mode_n
+
+                # If we are already heating in price mode, keep going until target is reached.
+                # This prevents new day-ahead prices from interrupting an active session:
+                # when tomorrow's cheap prices arrive at 13:30, they must not displace a
+                # session that is heating for today's 17:00 shower deadline.
+                # The guard is intentionally inside `not at_target` so it stops correctly
+                # when the boiler reaches the target (unlike the removed v1.2.56 guard
+                # that ran regardless).
+                if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
+                    return MODE_PRICE, price_target
+
                 price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
                 consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
 
                 if consecutive:
                     # Consecutive block: heat during the cheapest n-hour window.
-                    # _in_cheapest_block handles "stay on while inside the block" —
-                    # no separate heating guard needed (that guard prevented stopping
-                    # after the block ended).
                     if n > 0 and self._in_cheapest_block(now, n):
                         return MODE_PRICE, price_target
                     # Threshold fallback when no forecast available
