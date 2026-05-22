@@ -1050,22 +1050,38 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         for shower_dt, required_temp in self._upcoming_showers(now, schedules, normal_temp):
             hours_until = (shower_dt - now).total_seconds() / 3600
-            use_preheat = preheat_temp < required_temp and hours_until > 12.0
-            target_temp = preheat_temp if use_preheat else required_temp
 
-            if boiler_temp is not None and boiler_temp >= target_temp - self._effective_hysteresis():
+            # Skip entirely if boiler already at required_temp
+            if boiler_temp is not None and boiler_temp >= required_temp - self._effective_hysteresis():
                 continue
 
-            slots = self._planned_slots_for_deadline(
-                now, shower_dt, target_temp, heat_up_min, boiler_temp
-            )
-            if slots:
-                future = [s for s in slots if s > now]
-                candidates.append(min(future) if future else now)
-            else:
-                emergency = shower_dt - timedelta(minutes=heat_up_min + 10)
-                if emergency > now:
-                    candidates.append(emergency)
+            use_preheat = preheat_temp < required_temp and hours_until > 12.0
+
+            # Phase 1: preheat if shower is far and preheat not yet reached
+            if use_preheat and (boiler_temp is None or boiler_temp < preheat_temp - self._effective_hysteresis()):
+                slots = self._planned_slots_for_deadline(now, shower_dt, preheat_temp, heat_up_min, boiler_temp)
+                if slots:
+                    future = [s for s in slots if s > now]
+                    candidates.append(min(future) if future else now)
+                else:
+                    fallback = shower_dt - timedelta(minutes=heat_up_min + 10)
+                    if fallback > now:
+                        candidates.append(fallback)
+
+            # Phase 2: final push to required_temp within 12h window
+            phase2_start = max(now, shower_dt - timedelta(hours=12))
+            if phase2_start < shower_dt - timedelta(minutes=heat_up_min):
+                slots2 = self._planned_slots_for_deadline(
+                    phase2_start, shower_dt, required_temp, heat_up_min, boiler_temp
+                )
+                if slots2:
+                    future2 = [s for s in slots2 if s > now]
+                    if future2:
+                        candidates.append(min(future2))
+                else:
+                    fallback = shower_dt - timedelta(minutes=heat_up_min + 10)
+                    if fallback > now:
+                        candidates.append(fallback)
 
         return min(candidates) if candidates else None
 
@@ -1085,16 +1101,22 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         for shower_dt, required_temp in self._upcoming_showers(now, schedules, normal_temp):
             hours_until = (shower_dt - now).total_seconds() / 3600
-            use_preheat = preheat_temp < required_temp and hours_until > 12.0
-            target_temp = preheat_temp if use_preheat else required_temp
 
-            if boiler_temp is not None and boiler_temp >= target_temp - self._effective_hysteresis():
+            if boiler_temp is not None and boiler_temp >= required_temp - self._effective_hysteresis():
                 continue
 
-            for slot in self._planned_slots_for_deadline(
-                now, shower_dt, target_temp, heat_up_min, boiler_temp
-            ):
-                all_slots.add(slot.isoformat())
+            use_preheat = preheat_temp < required_temp and hours_until > 12.0
+
+            # Phase 1: preheat slots
+            if use_preheat and (boiler_temp is None or boiler_temp < preheat_temp - self._effective_hysteresis()):
+                for slot in self._planned_slots_for_deadline(now, shower_dt, preheat_temp, heat_up_min, boiler_temp):
+                    all_slots.add(slot.isoformat())
+
+            # Phase 2: final-push slots within 12h window
+            phase2_start = max(now, shower_dt - timedelta(hours=12))
+            if phase2_start < shower_dt - timedelta(minutes=heat_up_min):
+                for slot in self._planned_slots_for_deadline(phase2_start, shower_dt, required_temp, heat_up_min, boiler_temp):
+                    all_slots.add(slot.isoformat())
 
         return sorted(all_slots)
 
