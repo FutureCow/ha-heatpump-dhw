@@ -860,9 +860,6 @@ class DHWCoordinator(DataUpdateCoordinator):
         Returns (MODE_SCHEDULE, target_temp) or None.
         """
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
-        if not schedules:
-            return None
-
         heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
         upcoming = self._upcoming_showers(now, schedules, normal_temp)
@@ -895,6 +892,25 @@ class DHWCoordinator(DataUpdateCoordinator):
                 # No forecast — fixed fallback: start within heat_up_min + 10 min of shower
                 if (shower_dt - now).total_seconds() / 60 <= heat_up_min + 10:
                     return MODE_SCHEDULE, required_temp
+
+        # ── Fallback: pure price mode — heat to normal_temp during cheap hours ──
+        # Applies when no shower schedule is defined, or all scheduled showers are already hot.
+        if boiler_temp is not None and boiler_temp >= normal_temp - self._effective_hysteresis():
+            return None
+
+        if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
+            return MODE_PRICE, normal_temp
+
+        if skip_predictive:
+            return None
+
+        price_deadline = now + timedelta(hours=24)
+        result = self._in_cheap_slot_for_deadline(now, price_deadline, normal_temp, heat_up_min, boiler_temp)
+        if result is True:
+            return MODE_PRICE, normal_temp
+        if result is None:
+            # No forecast available — don't heat without price signal
+            return None
 
         return None
 
