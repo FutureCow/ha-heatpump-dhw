@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.16
+ * Heat Pump DHW Card — v2.17
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -456,7 +456,7 @@ class HeatpumpDhwCard extends HTMLElement {
       solar_switch: "switch.dhw_solar_mode",
       price_switch: "switch.dhw_price_mode",
       boost_switch: "switch.dhw_boost_mode",
-      vacation_switch: "switch.dhw_vacation_mode",
+      vacation_switch: "switch.dhw_on_vacation",
       legionella_switch: "switch.dhw_legionella_mode",
       manual_switch: "",
     };
