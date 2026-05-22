@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.15
+ * Heat Pump DHW Card — v2.16
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -379,8 +379,8 @@ class HeatpumpDhwCard extends HTMLElement {
         .dhw-chip-value { font-size:0.95rem; font-weight:600; color:var(--primary-text-color); }
         .dhw-next { font-size:0.82rem; color:var(--secondary-text-color); margin-bottom:12px; }
         .dhw-divider { border:none; border-top:1px solid var(--divider-color,#e5e7eb); margin:12px 0; }
-        .dhw-switches { display:flex; flex-wrap:wrap; gap:6px; }
-        .sw-btn { border:none; border-radius:8px; padding:5px 10px; font-size:0.78rem; cursor:pointer; font-family:inherit; transition:opacity 0.15s; }
+        .dhw-switches { display:flex; gap:6px; }
+        .sw-btn { border:none; border-radius:8px; padding:8px 4px; font-size:0.82rem; cursor:pointer; font-family:inherit; transition:opacity 0.15s; flex:1; text-align:center; }
         .sw-on  { background:var(--primary-color,#3b82f6); color:#fff; }
         .sw-off { background:var(--secondary-background-color,#e5e7eb); color:var(--secondary-text-color); }
         .sw-btn:hover { opacity:0.8; }
