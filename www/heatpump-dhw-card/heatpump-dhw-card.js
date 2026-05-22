@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.14
+ * Heat Pump DHW Card — v2.15
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -185,7 +185,7 @@ class HeatpumpDhwCard extends HTMLElement {
   }
 
   // ── Price chart renderer ──
-  _renderPriceChart(allPrices, nextHeatingDate, isHeating, plannedHeatingSlots) {
+  _renderPriceChart(allPrices, plannedHeatingSlots) {
     if (!allPrices.length) return "";
 
     // Detect slot resolution
@@ -220,11 +220,6 @@ class HeatpumpDhwCard extends HTMLElement {
       })
     );
 
-    // Next heating slot (aligned)
-    const nhMs = nextHeatingDate
-      ? Math.floor(nextHeatingDate.getTime() / slotMs) * slotMs
-      : null;
-
     // Color: green (cheap) → amber (mid) → red (expensive)
     const priceColor = (p) => {
       const t = (p - minP) / range;
@@ -240,9 +235,8 @@ class HeatpumpDhwCard extends HTMLElement {
 
     const barHtml = bars.map((entry, i) => {
       const ms = entry.start.getTime();
-      const isCur    = ms === curSlotMs;
-      const isCheap  = plannedSlots.has(ms);
-      const isNhSlot = nhMs !== null && ms === nhMs;
+      const isCur   = ms === curSlotMs;
+      const isCheap = plannedSlots.has(ms);
 
       const heightPct = (15 + ((entry.price - minP) / range) * 72).toFixed(1);
       const color = priceColor(entry.price);
@@ -255,25 +249,14 @@ class HeatpumpDhwCard extends HTMLElement {
           })
         : "";
 
-      // Top marker: flame for next-heating or current-while-heating, dot for cheap
-      let marker = "";
-      if (isCur && isHeating)       marker = `<span style="font-size:11px;">🔥</span>`;
-      else if (isNhSlot && !isCur)  marker = `<span style="font-size:11px;">🔥</span>`;
-      else if (isCheap)             marker = `<span style="font-size:9px;color:#22c55e;font-weight:700;">▼</span>`;
-
-      const barOutline = isCur
-        ? `box-shadow:0 0 0 2px #fff,0 0 0 3.5px ${isHeating ? "#f97316" : "#9ca3af"};`
-        : "";
-
       const innerStyle = isCheap
         ? `background:rgba(255,255,255,0.45);border-radius:4px 4px 0 0;`
         : "";
 
       return `<div style="display:flex;flex-direction:column;align-items:center;flex:1;min-width:0;">
         <div style="flex:1;display:flex;flex-direction:column;align-items:center;width:100%;${innerStyle}">
-          <div style="height:16px;display:flex;align-items:center;justify-content:center;">${marker}</div>
           <div style="flex:1;display:flex;align-items:flex-end;width:100%;padding:0 1px;">
-            <div style="width:100%;height:${heightPct}%;background:${color};border-radius:2px 2px 0 0;${barOutline}"></div>
+            <div style="width:100%;height:${heightPct}%;background:${color};border-radius:2px 2px 0 0;"></div>
           </div>
         </div>
         <div style="font-size:8.5px;color:var(--secondary-text-color);text-align:center;margin-top:2px;overflow:hidden;white-space:nowrap;width:100%;">${label}</div>
@@ -342,7 +325,7 @@ class HeatpumpDhwCard extends HTMLElement {
       plannedMinutes = 60;
     }
     const chartHtml      = c.price_forecast_sensor
-      ? this._renderPriceChart(allPrices, nextHeatingDate, isHeating, plannedSlots)
+      ? this._renderPriceChart(allPrices, plannedSlots)
       : "";
 
     const nextRel = this._formatRelTime(nextStr);
