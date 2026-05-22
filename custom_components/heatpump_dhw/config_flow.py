@@ -226,10 +226,10 @@ class DHWOptionsFlow(OptionsFlow):
         return self.async_show_form(step_id="thresholds", data_schema=schema)
 
     async def async_step_shower_schedules(self, user_input=None):
-        """Configure up to 3 shower schedules."""
+        """Configure up to 5 shower schedules."""
         if user_input is not None:
             schedules = []
-            for i in range(1, 4):
+            for i in range(1, 6):
                 if user_input.get(f"s{i}_enabled"):
                     raw_time = user_input.get(f"s{i}_time", "07:00:00")
                     # TimeSelector returns HH:MM:SS — strip seconds
@@ -247,7 +247,7 @@ class DHWOptionsFlow(OptionsFlow):
         # Pre-fill from stored schedules
         stored = self._config_entry.options.get(CONF_SHOWER_SCHEDULES, [])
         d: dict = {}
-        for i in range(1, 4):
+        for i in range(1, 6):
             sched = stored[i - 1] if i - 1 < len(stored) else None
             d[f"s{i}_enabled"] = sched is not None
             d[f"s{i}_time"] = (sched["time"] + ":00") if sched else "07:00:00"
@@ -266,7 +266,7 @@ class DHWOptionsFlow(OptionsFlow):
                 ),
             }
 
-        schema = vol.Schema({**_slot(1), **_slot(2), **_slot(3)})
+        schema = vol.Schema({**_slot(1), **_slot(2), **_slot(3), **_slot(4), **_slot(5)})
         return self.async_show_form(step_id="shower_schedules", data_schema=schema)
 
 

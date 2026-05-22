@@ -113,7 +113,7 @@
       },
       "shower_schedules": {
         "title": "Shower schedules",
-        "description": "Configure up to 3 shower moments. The boiler pre-heats automatically.",
+        "description": "Configure up to 5 shower moments. The boiler pre-heats automatically.",
         "data": {
           "s1_enabled": "Schedule 1 active",
           "s1_time": "Schedule 1 — time",
@@ -126,7 +126,15 @@
           "s3_enabled": "Schedule 3 active",
           "s3_time": "Schedule 3 — time",
           "s3_days": "Schedule 3 — days",
-          "s3_temp": "Schedule 3 — required temperature (°C)"
+          "s3_temp": "Schedule 3 — required temperature (°C)",
+          "s4_enabled": "Schedule 4 active",
+          "s4_time": "Schedule 4 — time",
+          "s4_days": "Schedule 4 — days",
+          "s4_temp": "Schedule 4 — required temperature (°C)",
+          "s5_enabled": "Schedule 5 active",
+          "s5_time": "Schedule 5 — time",
+          "s5_days": "Schedule 5 — days",
+          "s5_temp": "Schedule 5 — required temperature (°C)"
         }
       }
     }
