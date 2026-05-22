@@ -1,5 +1,5 @@
 /**
- * Heat Pump DHW Card — v2.13
+ * Heat Pump DHW Card — v2.14
  *
  * Configuratie:
  *   type: custom:heatpump-dhw-card
@@ -25,7 +25,6 @@
 const MODE_COLORS = {
   solar:      "#f59e0b",
   boost:      "#f97316",
-  price:      "#22c55e",
   schedule:   "#3b82f6",
   legionella: "#ef4444",
   vacation:   "#a78bfa",
@@ -37,7 +36,6 @@ const MODE_COLORS = {
 const MODE_LABELS = {
   solar:      "Zonne-energie",
   boost:      "Boost",
-  price:      "Lage prijs",
   schedule:   "Douche schema",
   legionella: "Legionella run",
   vacation:   "Vakantie",
@@ -46,7 +44,7 @@ const MODE_LABELS = {
   anti_block: "Anti-blokkeer",
 };
 
-const HEATING_MODES = new Set(["solar", "boost", "price", "schedule", "legionella", "manual", "anti_block"]);
+const HEATING_MODES = new Set(["solar", "boost", "schedule", "legionella", "manual", "anti_block"]);
 
 class HeatpumpDhwCard extends HTMLElement {
   setConfig(config) {
@@ -352,7 +350,7 @@ class HeatpumpDhwCard extends HTMLElement {
     // Mode switches (manual has its own big button below)
     const switches = [
       { id: c.solar_switch,     label: "Zon",       icon: "☀️" },
-      { id: c.price_switch,     label: "Prijs",     icon: "💶" },
+      { id: c.price_switch,     label: "Schema",    icon: "📅" },
       { id: c.boost_switch,     label: "Boost",     icon: "🚀" },
       { id: c.vacation_switch,  label: "Vakantie",  icon: "🏖️" },
       { id: c.legionella_switch,label: "Legionella",icon: "🦠" },
