@@ -739,18 +739,21 @@ class DHWCoordinator(DataUpdateCoordinator):
             return False
         hours_to_end = math.ceil((window_end - now).total_seconds() / 3600) + 1
         prices = self._get_forecast_prices(now, hours=hours_to_end)
-        feasible = [
-            (t, p) for t, p in prices
-            if t >= now and t + timedelta(minutes=heat_up_min) <= shower_dt
-        ]
-        if not feasible:
+        if not prices:
             return None
-        slot_minutes = self._detect_slot_minutes(feasible)
-        n_slots = n_needed * (60 // slot_minutes)
+        slot_minutes = self._detect_slot_minutes(prices)
         current_slot = now.replace(
             minute=(now.minute // slot_minutes) * slot_minutes,
             second=0, microsecond=0,
         )
+        feasible = [
+            (t, p) for t, p in prices
+            if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
+            and t + timedelta(minutes=heat_up_min) <= shower_dt
+        ]
+        if not feasible:
+            return None
+        n_slots = n_needed * (60 // slot_minutes)
         consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
         if consecutive and n_slots > 1:
             slot_seconds = slot_minutes * 60
@@ -797,13 +800,20 @@ class DHWCoordinator(DataUpdateCoordinator):
             return []
         hours_to_end = math.ceil((window_end - now).total_seconds() / 3600) + 1
         prices = self._get_forecast_prices(now, hours=hours_to_end)
+        if not prices:
+            return []
+        slot_minutes = self._detect_slot_minutes(prices)
+        current_slot = now.replace(
+            minute=(now.minute // slot_minutes) * slot_minutes,
+            second=0, microsecond=0,
+        )
         feasible = [
             (t, p) for t, p in prices
-            if t >= now and t + timedelta(minutes=heat_up_min) <= shower_dt
+            if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
+            and t + timedelta(minutes=heat_up_min) <= shower_dt
         ]
         if not feasible:
             return []
-        slot_minutes = self._detect_slot_minutes(feasible)
         n_slots = n_needed * (60 // slot_minutes)
         consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
         if consecutive and n_slots > 1:
