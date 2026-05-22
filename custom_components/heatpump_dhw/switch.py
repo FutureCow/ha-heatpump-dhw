@@ -28,8 +28,8 @@ SWITCHES: tuple[DHWSwitchDescription, ...] = (
     ),
     DHWSwitchDescription(
         key="price_mode",
-        name="Dynamische prijs modus",
-        icon="mdi:currency-eur",
+        name="Schema & prijs modus",
+        icon="mdi:calendar-clock",
         attr="price_mode_enabled",
     ),
     DHWSwitchDescription(
