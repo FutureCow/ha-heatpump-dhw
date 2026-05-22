@@ -113,7 +113,7 @@
       },
       "shower_schedules": {
         "title": "Douche schema's",
-        "description": "Stel maximaal 3 douche-momenten in. De boiler start automatisch op tijd met opwarmen.",
+        "description": "Stel maximaal 5 douche-momenten in. De boiler start automatisch op tijd met opwarmen.",
         "data": {
           "s1_enabled": "Schema 1 actief",
           "s1_time": "Schema 1 — tijd",
@@ -126,7 +126,15 @@
           "s3_enabled": "Schema 3 actief",
           "s3_time": "Schema 3 — tijd",
           "s3_days": "Schema 3 — dagen",
-          "s3_temp": "Schema 3 — gewenste temperatuur (°C)"
+          "s3_temp": "Schema 3 — gewenste temperatuur (°C)",
+          "s4_enabled": "Schema 4 actief",
+          "s4_time": "Schema 4 — tijd",
+          "s4_days": "Schema 4 — dagen",
+          "s4_temp": "Schema 4 — gewenste temperatuur (°C)",
+          "s5_enabled": "Schema 5 actief",
+          "s5_time": "Schema 5 — tijd",
+          "s5_days": "Schema 5 — dagen",
+          "s5_temp": "Schema 5 — gewenste temperatuur (°C)"
         }
       }
     }
