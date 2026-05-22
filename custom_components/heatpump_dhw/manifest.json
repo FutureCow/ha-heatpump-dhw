@@ -1,7 +1,7 @@
 {
   "domain": "heatpump_dhw",
   "name": "Heat Pump DHW",
-  "version": "1.2.60",
+  "version": "1.2.61",
   "documentation": "https://github.com/FutureCow/ha-heatpump-dhw",
   "issue_tracker": "https://github.com/FutureCow/ha-heatpump-dhw/issues",
   "codeowners": ["@FutureCow"],

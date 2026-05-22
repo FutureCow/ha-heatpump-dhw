@@ -33,10 +33,8 @@ from .const import (
     CONF_WEATHER_ENTITY,
     DEFAULT_ANTI_BLOCK_DAYS,
     DEFAULT_BOOST_TEMP,
-    DEFAULT_CHEAP_HOURS,
     DEFAULT_BOILER_SETPOINT_OFFSET,
     DEFAULT_PRICE_MODE_CONSECUTIVE,
-    DEFAULT_PRICE_WINDOW_HOURS,
     DEFAULT_AMBIENT_TEMP,
     DEFAULT_TANK_LOSS_RATE,
     DEFAULT_BOOST_THRESHOLD_W,
@@ -45,18 +43,14 @@ from .const import (
     DEFAULT_LEGIONELLA_TEMP,
     DEFAULT_NORMAL_TEMP,
     DEFAULT_PREDICTIVE_HEATING,
-    DEFAULT_PRICE_THRESHOLD_EUR,
-
     DEFAULT_SOLAR_THRESHOLD_W,
     DEFAULT_TANK_VOLUME_L,
     DEFAULT_VACATION_ABSENCE_HOURS,
     DEFAULT_VACATION_MIN_TEMP,
-    OPT_CHEAP_HOURS,
     OPT_BOILER_SETPOINT_OFFSET,
     OPT_PREHEAT_TEMP,
     DEFAULT_PREHEAT_TEMP,
     OPT_PRICE_MODE_CONSECUTIVE,
-    OPT_PRICE_WINDOW_HOURS,
     OPT_TANK_LOSS_RATE,
     DOMAIN,
     HEAT_UP_SAMPLE_SIZE,
@@ -81,8 +75,6 @@ from .const import (
     OPT_NORMAL_TEMP,
     OPT_PREDICTIVE_HEATING,
     OPT_PRICE_MODE_ENABLED,
-    OPT_PRICE_THRESHOLD_EUR,
-
     OPT_SOLAR_MODE_ENABLED,
     OPT_SOLAR_THRESHOLD_W,
     OPT_TANK_VOLUME_L,
@@ -159,7 +151,6 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._manual_heat: bool = False
         self._manual_heat_start_temp: float | None = None  # boilertemp bij activatie
         self._manual_heat_since: datetime | None = None   # tijdstip van activatie
-        self._price_mode_n: int = 0  # cheap-hour count fixed at start of planning cycle
 
         # Absence tracking for delayed vacation mode
         self._absence_start: datetime | None = None
@@ -707,112 +698,194 @@ class DHWCoordinator(DataUpdateCoordinator):
             rate = mean(self._heat_rate_samples)  # °C/hour
             return max(1, math.ceil(delta / rate))
         # No rate data yet: estimate at a conservative 5 °C/h (typical heat-pump DHW rate).
-        # Do NOT use the user-configured OPT_CHEAP_HOURS here — that is a global budget,
-        # not a physical heat-up duration, and leads to absurd values (e.g. 6 h for 11 °C).
         return max(1, math.ceil(delta / 5.0))
 
-    def _effective_window_hours(self) -> int:
-        """Return the configured price window; 0 means use all available data (168h)."""
-        w = int(self._opt(OPT_PRICE_WINDOW_HOURS, DEFAULT_PRICE_WINDOW_HOURS))
-        return 168 if w == 0 else w
-
-    def _effective_price_target(self, now: datetime, normal_temp: float) -> float:
-        """Return the price-mode target temperature.
-
-        When shower schedules are configured and the next shower is more than 12 h away,
-        the price mode pre-heats to preheat_temp only.  The shower schedule handles the
-        final push to normal_temp closer to the deadline, minimising tank losses.
-        """
-        preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
-        if preheat_temp >= normal_temp:
-            return normal_temp
-
-        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
-        if not schedules:
-            return normal_temp
-
+    def _upcoming_showers(
+        self, now: datetime, schedules: list[dict], normal_temp: float, hours: int = 48
+    ) -> list[tuple[datetime, float]]:
+        """Return upcoming shower (shower_dt, required_temp) pairs sorted by deadline."""
+        upcoming: list[tuple[datetime, float]] = []
         for sched in schedules:
             days = sched.get("days", list(range(7)))
             shower_time = dt_time.fromisoformat(sched.get("time", "07:30"))
-            for day_offset in range(3):
+            required_temp = float(sched.get("temp", normal_temp))
+            for day_offset in range(int(hours / 24) + 2):
                 candidate = now + timedelta(days=day_offset)
                 if candidate.weekday() not in days:
                     continue
                 shower_dt = datetime.combine(candidate.date(), shower_time, tzinfo=now.tzinfo)
                 if shower_dt <= now:
                     continue
-                hours_until = (shower_dt - now).total_seconds() / 3600
-                if hours_until <= 12.0:
-                    return normal_temp  # shower is close — heat to full target
-                return preheat_temp    # shower is far — pre-heat to lower target
+                if (shower_dt - now).total_seconds() / 3600 > hours:
+                    continue
+                upcoming.append((shower_dt, required_temp))
+        upcoming.sort(key=lambda x: x[0])
+        return upcoming
 
-        return normal_temp
-
-    def _is_cheap_slot(self, now: datetime, n_hours: int) -> bool:
-        """Return True if the current price slot is among the cheapest n_hours worth.
-
-        Works with any slot resolution (15/30/60 min) — auto-detected from forecast data.
-        """
-        if n_hours == 0:
+    def _in_cheap_slot_for_deadline(
+        self,
+        now: datetime,
+        shower_dt: datetime,
+        target_temp: float,
+        heat_up_min: float,
+        boiler_temp: float | None,
+    ) -> bool | None:
+        """Return True if now is a cheap heating slot for shower_dt, None if no forecast."""
+        n_needed = self._needed_cheap_hours(boiler_temp, target_temp)
+        if n_needed == 0:
             return False
-        prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
-        if not prices:
+        window_end = shower_dt - timedelta(minutes=heat_up_min)
+        if window_end <= now:
             return False
-        slot_minutes = self._detect_slot_minutes(prices)
-        n_slots = n_hours * (60 // slot_minutes)
-        current_slot = now.replace(
-            minute=(now.minute // slot_minutes) * slot_minutes,
-            second=0, microsecond=0,
-        )
-        # Exclude past sub-slots within the current hour (relevant for <60 min resolution)
-        future = [
+        hours_to_end = math.ceil((window_end - now).total_seconds() / 3600) + 1
+        prices = self._get_forecast_prices(now, hours=hours_to_end)
+        feasible = [
             (t, p) for t, p in prices
-            if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
+            if t >= now and t + timedelta(minutes=heat_up_min) <= shower_dt
         ]
-        if not future:
-            return False
-        cheapest_starts = {
-            self._to_local_slot(dt, now.tzinfo, slot_minutes)
-            for dt, _ in sorted(future, key=lambda x: x[1])[:n_slots]
-        }
-        return current_slot in cheapest_starts
-
-    def _in_cheapest_block(self, now: datetime, n_hours: int) -> bool:
-        """Return True if the current slot falls within the cheapest consecutive block.
-
-        Block length is n_hours; slot resolution is auto-detected from forecast data.
-        """
-        if n_hours == 0:
-            return False
-        prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
-        if not prices:
-            return False
-        slot_minutes = self._detect_slot_minutes(prices)
-        n_slots = n_hours * (60 // slot_minutes)
-        slot_seconds = slot_minutes * 60
+        if not feasible:
+            return None
+        slot_minutes = self._detect_slot_minutes(feasible)
+        n_slots = n_needed * (60 // slot_minutes)
         current_slot = now.replace(
             minute=(now.minute // slot_minutes) * slot_minutes,
             second=0, microsecond=0,
         )
-        best_start: datetime | None = None
-        best_cost = float("inf")
-        for i in range(len(prices) - n_slots + 1):
-            window = prices[i : i + n_slots]
-            if any(
-                (window[j + 1][0] - window[j][0]).total_seconds() != slot_seconds
-                for j in range(n_slots - 1)
-            ):
+        consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
+        if consecutive and n_slots > 1:
+            slot_seconds = slot_minutes * 60
+            best_start: datetime | None = None
+            best_cost = float("inf")
+            for i in range(len(feasible) - n_slots + 1):
+                block = feasible[i : i + n_slots]
+                if any(
+                    (block[j + 1][0] - block[j][0]).total_seconds() != slot_seconds
+                    for j in range(n_slots - 1)
+                ):
+                    continue
+                total = sum(p for _, p in block)
+                if total < best_cost:
+                    best_cost = total
+                    best_start = block[0][0]
+            if best_start is None:
+                return False
+            block_end = best_start + timedelta(minutes=slot_minutes * n_slots)
+            ls = self._to_local_slot(best_start, now.tzinfo, slot_minutes)
+            le = self._to_local_slot(block_end, now.tzinfo, slot_minutes)
+            return ls <= current_slot < le
+        else:
+            cheapest_slots = {
+                self._to_local_slot(t, now.tzinfo, slot_minutes)
+                for t, _ in sorted(feasible, key=lambda x: x[1])[:n_slots]
+            }
+            return current_slot in cheapest_slots
+
+    def _planned_slots_for_deadline(
+        self,
+        now: datetime,
+        shower_dt: datetime,
+        target_temp: float,
+        heat_up_min: float,
+        boiler_temp: float | None,
+    ) -> list[datetime]:
+        """Return sorted list of planned heating slot datetimes for a shower deadline."""
+        n_needed = self._needed_cheap_hours(boiler_temp, target_temp)
+        if n_needed == 0:
+            return []
+        window_end = shower_dt - timedelta(minutes=heat_up_min)
+        if window_end <= now:
+            return []
+        hours_to_end = math.ceil((window_end - now).total_seconds() / 3600) + 1
+        prices = self._get_forecast_prices(now, hours=hours_to_end)
+        feasible = [
+            (t, p) for t, p in prices
+            if t >= now and t + timedelta(minutes=heat_up_min) <= shower_dt
+        ]
+        if not feasible:
+            return []
+        slot_minutes = self._detect_slot_minutes(feasible)
+        n_slots = n_needed * (60 // slot_minutes)
+        consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
+        if consecutive and n_slots > 1:
+            slot_seconds = slot_minutes * 60
+            best_start: datetime | None = None
+            best_cost = float("inf")
+            for i in range(len(feasible) - n_slots + 1):
+                block = feasible[i : i + n_slots]
+                if any(
+                    (block[j + 1][0] - block[j][0]).total_seconds() != slot_seconds
+                    for j in range(n_slots - 1)
+                ):
+                    continue
+                total = sum(p for _, p in block)
+                if total < best_cost:
+                    best_cost = total
+                    best_start = block[0][0]
+            if best_start is None:
+                return []
+            return [
+                self._to_local_slot(
+                    best_start + timedelta(minutes=slot_minutes * i), now.tzinfo, slot_minutes
+                )
+                for i in range(n_slots)
+            ]
+        else:
+            cheapest = sorted(feasible, key=lambda x: x[1])[:n_slots]
+            return sorted(
+                self._to_local_slot(t, now.tzinfo, slot_minutes) for t, _ in cheapest
+            )
+
+    def _decide_price_schedule(
+        self,
+        now: datetime,
+        boiler_temp: float | None,
+        normal_temp: float,
+        skip_predictive: bool = False,
+    ) -> tuple[str, float] | None:
+        """Deadline-aware price + schedule mode (merged).
+
+        For each upcoming shower finds cheapest hours in [now .. deadline - heat_up_min].
+        Emergency heating fires within 2× heat_up_min regardless of price or predictive flag.
+        Returns (MODE_SCHEDULE, target_temp) or None.
+        """
+        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
+        if not schedules:
+            return None
+
+        heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
+        preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
+        upcoming = self._upcoming_showers(now, schedules, normal_temp)
+
+        for shower_dt, required_temp in upcoming:
+            hours_until = (shower_dt - now).total_seconds() / 3600
+            use_preheat = preheat_temp < required_temp and hours_until > 12.0
+            target_temp = preheat_temp if use_preheat else required_temp
+
+            if boiler_temp is not None and boiler_temp >= target_temp - self._effective_hysteresis():
                 continue
-            total = sum(p for _, p in window)
-            if total < best_cost:
-                best_cost = total
-                best_start = window[0][0]
-        if best_start is None:
-            return False
-        block_end = best_start + timedelta(minutes=slot_minutes * n_slots)
-        local_start = best_start.astimezone(now.tzinfo)
-        local_end = block_end.astimezone(now.tzinfo)
-        return local_start <= current_slot < local_end
+
+            # Emergency: heat regardless of price/predictive within 2× heat_up_min
+            if hours_until * 60 <= 2 * heat_up_min:
+                return MODE_SCHEDULE, required_temp
+
+            # Keep active session running — don't interrupt for new prices
+            if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
+                return MODE_SCHEDULE, target_temp
+
+            if skip_predictive:
+                continue
+
+            result = self._in_cheap_slot_for_deadline(
+                now, shower_dt, target_temp, heat_up_min, boiler_temp
+            )
+            if result is True:
+                return MODE_SCHEDULE, target_temp
+            if result is None:
+                # No forecast — fixed fallback: start within heat_up_min + 10 min of shower
+                if (shower_dt - now).total_seconds() / 60 <= heat_up_min + 10:
+                    return MODE_SCHEDULE, required_temp
+
+        return None
 
     # ------------------------------------------------------------------
     # Mode decision — priority order
@@ -928,64 +1001,15 @@ class DHWCoordinator(DataUpdateCoordinator):
         ):
             return MODE_SOLAR, solar_target
 
-        # 6. Dynamic price — use cheapest-hours forecast when available, else threshold; skip during vacation
-        predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
-        skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
-        if self.price_mode_enabled and not self._vacation_active and not skip_predictive:
-            # When a shower is scheduled >12 h away, only pre-heat to preheat_temp to
-            # minimise tank losses.  The shower schedule handles the final push.
-            price_target = self._effective_price_target(now, normal_temp)
-            # at_target: boiler has enough heat to stop (accounts for setpoint offset)
-            at_target = boiler_temp is not None and boiler_temp >= price_target - self._effective_hysteresis()
-            # at_target_done: boiler truly finished — only then clear the planning
-            at_target_done = boiler_temp is not None and boiler_temp >= price_target - TEMP_HYSTERESIS
-            if at_target_done and not self._heating:
-                self._price_mode_n = 0
-            if not at_target:
-                # Fix n at start of planning cycle so rising boiler temp doesn't shrink
-                # the cheap-hour selection mid-session
-                if self._price_mode_n == 0:
-                    self._price_mode_n = self._needed_cheap_hours(boiler_temp, price_target)
-                n = self._price_mode_n
+        # 6. Deadline-aware price + schedule (merged) — skip during vacation
+        if self.price_mode_enabled and not self._vacation_active:
+            predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
+            skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
+            result = self._decide_price_schedule(now, boiler_temp, normal_temp, skip_predictive)
+            if result is not None:
+                return result
 
-                # If we are already heating in price mode, keep going until target is reached.
-                # This prevents new day-ahead prices from interrupting an active session:
-                # when tomorrow's cheap prices arrive at 13:30, they must not displace a
-                # session that is heating for today's 17:00 shower deadline.
-                # The guard is intentionally inside `not at_target` so it stops correctly
-                # when the boiler reaches the target (unlike the removed v1.2.56 guard
-                # that ran regardless).
-                if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
-                    return MODE_PRICE, price_target
-
-                price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
-                consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
-
-                if consecutive:
-                    # Consecutive block: heat during the cheapest n-hour window.
-                    if n > 0 and self._in_cheapest_block(now, n):
-                        return MODE_PRICE, price_target
-                    # Threshold fallback when no forecast available
-                    if price_eur is not None and price_eur <= price_threshold:
-                        return MODE_PRICE, price_target
-                else:
-                    # Non-consecutive: heat during each of the cheapest n hours individually
-                    use_forecast = n > 0 and self._is_cheap_slot(now, n)
-                    use_threshold = (
-                        not use_forecast
-                        and price_eur is not None
-                        and price_eur <= price_threshold
-                    )
-                    if use_forecast or use_threshold:
-                        return MODE_PRICE, price_target
-
-        # 7. Shower schedule — skip during vacation (no one home to shower)
-        if not self._vacation_active:
-            schedule_mode, schedule_temp = self._check_schedule(now, boiler_temp)
-            if schedule_mode:
-                return MODE_SCHEDULE, schedule_temp or normal_temp
-
-        # 8. Vacation — hold minimum temperature
+        # 7. Vacation — hold minimum temperature
         if self._vacation_active:
             if boiler_temp is None or boiler_temp < min_temp - self._effective_hysteresis():
                 return MODE_VACATION, min_temp
@@ -1001,291 +1025,68 @@ class DHWCoordinator(DataUpdateCoordinator):
             return False
         return True
 
-    def _find_optimal_shower_slot(
-        self,
-        now: datetime,
-        shower_dt: datetime,
-        required_temp: float,
-        heat_up_min: float,
-        boiler_temp: float | None = None,
-    ) -> tuple[datetime | None, float]:
-        """Find cheapest hour to pre-heat for a shower, with heat-loss buffer.
-
-        If price data does not yet cover the period near the shower deadline
-        (e.g. day-ahead prices not published until 13:30), heating is deferred
-        until sufficient data is available. Exception: if a currently known price
-        is exceptional (≤ 50 % of the configured threshold), the boiler is
-        pre-heated to a raised target to compensate for the extra tank-loss time.
-
-        Returns (slot_start, target_temp) or (None, required_temp) if no
-        forecast data or if heating should be deferred.
-        """
-        window_hours = self._effective_window_hours()
-        outside_temp = self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR))
-        boost_temp = self._opt(OPT_BOOST_TEMP, DEFAULT_BOOST_TEMP)
-        price_threshold = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
-
-        all_prices = self._get_forecast_prices(now, hours=window_hours)
-        if not all_prices:
-            return None, required_temp
-
-        # Latest moment by which heating must START for the boiler to be ready
-        latest_start = shower_dt - timedelta(minutes=heat_up_min + 10)
-
-        # Slots feasible for shower pre-heat (heating finishes before shower)
-        feasible = [
-            (t, p) for t, p in all_prices
-            if t >= now and t + timedelta(minutes=heat_up_min) <= shower_dt
-        ]
-        if not feasible:
-            return None, required_temp
-
-        data_horizon = max(t for t, _ in all_prices)
-
-        # If known price data ends more than 3 h before the latest feasible
-        # heating start, we are missing future prices (e.g. it is Wednesday and
-        # Friday's day-ahead prices are not yet published).  Committing to an
-        # early Thursday slot would overshoot on tank loss.  Defer — UNLESS a
-        # currently available price is exceptional (≤ 50 % of the configured
-        # threshold), in which case pre-heat to a raised target to compensate.
-        if data_horizon < latest_start - timedelta(hours=3):
-            exceptional_threshold = max(0.0, price_threshold) * 0.5
-            exceptional = [(t, p) for t, p in feasible if p <= exceptional_threshold]
-            if not exceptional:
-                _LOGGER.debug(
-                    "DHW: douche %s — uitgesteld: prijsdata tot %s, "
-                    "planningsvenster begint %s; geen uitzonderlijk goedkope uren",
-                    shower_dt.strftime("%a %d-%b %H:%M"),
-                    data_horizon.strftime("%a %d-%b %H:%M"),
-                    latest_start.strftime("%a %d-%b %H:%M"),
-                )
-                return None, required_temp
-
-            # Exceptional price: pick the LATEST such slot (shortest tank-loss gap)
-            # and raise the target to compensate for the heat lost before the shower.
-            best_t = max(t for t, _ in exceptional)
-            best_price = {t: p for t, p in exceptional}[best_t]
-            heat_end = best_t + timedelta(minutes=heat_up_min)
-            hours_gap = max(0.0, (shower_dt - heat_end).total_seconds() / 3600)
-            loss_rate = self._loss_rate_at(required_temp, outside_temp)
-            buffer = min(hours_gap * loss_rate, boost_temp - required_temp)
-            target = round(min(required_temp + buffer, boost_temp), 1)
-            _LOGGER.info(
-                "DHW: douche %s — uitzonderlijk goedkoop (%.3f €/kWh ≤ %.3f), "
-                "pre-heat naar %.1f°C (+%.1f°C buffer voor %dh warmteverlies)",
-                shower_dt.strftime("%a %d-%b %H:%M"), best_price, exceptional_threshold,
-                target, buffer, int(hours_gap),
-            )
-            return best_t, target
-
-        # Normal case: data covers the planning window — pick the cheapest slot.
-        cheap_n = self._needed_cheap_hours(boiler_temp, required_temp)
-        # Only rank future prices — past hours must not crowd out present cheap slots.
-        cheapest_times = {
-            t for t, _ in sorted(
-                [(t, p) for t, p in all_prices if t >= now], key=lambda x: x[1]
-            )[:cheap_n]
-        }
-
-        # Prefer the LAST cheap slot before the shower — buffer only needed for that gap.
-        # If no cheap slot is feasible, fall back to the single cheapest feasible slot.
-        cheap_feasible = [(t, p) for t, p in feasible if t in cheapest_times]
-        if cheap_feasible:
-            best_t = max(t for t, _ in cheap_feasible)  # latest cheap slot
-        else:
-            best_t, _ = min(feasible, key=lambda x: x[1])  # cheapest feasible
-
-        # Buffer only for the gap between end of LAST heating and shower
-        heat_end = best_t + timedelta(minutes=heat_up_min)
-        hours_gap = max(0.0, (shower_dt - heat_end).total_seconds() / 3600)
-        loss_rate = self._loss_rate_at(required_temp, outside_temp)
-        buffer = min(hours_gap * loss_rate, 8.0)  # cap at 8 °C for normal pre-heat
-        target = round(min(required_temp + buffer, boost_temp), 1)
-
-        return best_t, target
-
-    def _check_schedule(
-        self, now: datetime, boiler_temp: float | None
-    ) -> tuple[bool, float | None]:
-        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
-        heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
-        normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
-        window_hours = self._effective_window_hours()
-        # Control decisions only matter for showers within 48 h — beyond that the
-        # optimal slot can never be 'now', so extra iterations are always no-ops.
-        check_hours = min(window_hours, 48)
-
-        for sched in schedules:
-            days = sched.get("days", list(range(7)))
-            shower_time = dt_time.fromisoformat(sched.get("time", "07:30"))
-            required_temp = sched.get("temp", normal_temp)
-
-            # Collect all shower occurrences within the look-ahead window
-            for day_offset in range(int(check_hours / 24) + 2):
-                candidate = now + timedelta(days=day_offset)
-                if candidate.weekday() not in days:
-                    continue
-                shower_dt = datetime.combine(candidate.date(), shower_time, tzinfo=now.tzinfo)
-                if shower_dt <= now:
-                    continue
-                if (shower_dt - now).total_seconds() / 3600 > check_hours:
-                    continue
-
-                # Try price-optimal slot first
-                optimal_t, target_temp = self._find_optimal_shower_slot(
-                    now, shower_dt, required_temp, heat_up_min, boiler_temp
-                )
-                if optimal_t is not None:
-                    current_hour = now.replace(minute=0, second=0, microsecond=0)
-                    slot_hour = self._to_local_hour(optimal_t, now.tzinfo)
-                    if current_hour == slot_hour:
-                        if boiler_temp is None or boiler_temp < target_temp - self._effective_hysteresis():
-                            return True, target_temp
-                else:
-                    # No forecast — fall back to fixed window
-                    start_at = shower_dt - timedelta(minutes=heat_up_min + 10)
-                    if start_at <= now <= shower_dt:
-                        if boiler_temp is None or boiler_temp < required_temp - self._effective_hysteresis():
-                            return True, required_temp
-
-        return False, None
-
     def _calc_next_heating(self, now: datetime) -> datetime | None:
-        schedules = [] if self._vacation_active else self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
+        if self._vacation_active or not self.price_mode_enabled:
+            return None
+        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
+        if not schedules:
+            return None
+
+        boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
         heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
-        window_hours = self._effective_window_hours()
+        preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
         candidates: list[datetime] = []
 
-        for sched in schedules:
-            days = sched.get("days", list(range(7)))
-            shower_time = dt_time.fromisoformat(sched.get("time", "07:30"))
-            required_temp = sched.get("temp", normal_temp)
+        for shower_dt, required_temp in self._upcoming_showers(now, schedules, normal_temp):
+            hours_until = (shower_dt - now).total_seconds() / 3600
+            use_preheat = preheat_temp < required_temp and hours_until > 12.0
+            target_temp = preheat_temp if use_preheat else required_temp
 
-            for day_offset in range(int(window_hours / 24) + 2):
-                candidate = now + timedelta(days=day_offset)
-                if candidate.weekday() not in days:
-                    continue
-                shower_dt = datetime.combine(candidate.date(), shower_time, tzinfo=now.tzinfo)
-                if shower_dt <= now:
-                    continue
+            if boiler_temp is not None and boiler_temp >= target_temp - self._effective_hysteresis():
+                continue
 
-                optimal_t, _ = self._find_optimal_shower_slot(
-                    now, shower_dt, required_temp, heat_up_min
-                )
-                if optimal_t is not None and optimal_t > now:
-                    candidates.append(optimal_t)
-                else:
-                    start_dt = shower_dt - timedelta(minutes=heat_up_min + 10)
-                    if start_dt > now:
-                        candidates.append(start_dt)
-                break  # only first occurrence per schedule
-
-        # Also consider next cheap price slot (if price mode enabled and boiler needs heating)
-        if self.price_mode_enabled:
-            boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
-            n = self._price_mode_n or self._needed_cheap_hours(boiler_temp, normal_temp)
-            consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
-            if n > 0:
-                prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
-                slot_minutes = self._detect_slot_minutes(prices) if len(prices) >= 2 else 60
-                n_slots = n * (60 // slot_minutes)
-                slot_seconds = slot_minutes * 60
-                # Current slot boundary (e.g. 10:30 when it's 10:33 with 15-min slots)
-                current_slot = now.replace(
-                    minute=(now.minute // slot_minutes) * slot_minutes,
-                    second=0, microsecond=0,
-                )
-                if consecutive:
-                    # Find cheapest consecutive block; include if we're already within it
-                    best_start: datetime | None = None
-                    best_cost = float("inf")
-                    for i in range(len(prices) - n_slots + 1):
-                        window = prices[i : i + n_slots]
-                        if any(
-                            (window[j + 1][0] - window[j][0]).total_seconds() != slot_seconds
-                            for j in range(n_slots - 1)
-                        ):
-                            continue
-                        total = sum(p for _, p in window)
-                        if total < best_cost:
-                            best_cost = total
-                            best_start = window[0][0]
-                    if best_start is not None:
-                        local_start = self._to_local_slot(best_start, now.tzinfo, slot_minutes)
-                        block_end_dt = (
-                            best_start + timedelta(minutes=slot_minutes * n_slots)
-                        ).astimezone(now.tzinfo)
-                        if local_start > now:
-                            candidates.append(local_start)
-                        elif now < block_end_dt:
-                            # Currently mid-block — report the current slot start as next heating
-                            candidates.append(current_slot)
-                else:
-                    # First cheap slot from current slot onwards (includes current slot if cheap)
-                    future_prices = [
-                        (t, p) for t, p in prices
-                        if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
-                    ]
-                    cheapest = sorted(future_prices, key=lambda x: x[1])[:n_slots]
-                    for slot_t, _ in sorted(cheapest, key=lambda x: x[0]):
-                        candidates.append(self._to_local_slot(slot_t, now.tzinfo, slot_minutes))
-                        break
+            slots = self._planned_slots_for_deadline(
+                now, shower_dt, target_temp, heat_up_min, boiler_temp
+            )
+            if slots:
+                future = [s for s in slots if s > now]
+                candidates.append(min(future) if future else now)
+            else:
+                emergency = shower_dt - timedelta(minutes=heat_up_min + 10)
+                if emergency > now:
+                    candidates.append(emergency)
 
         return min(candidates) if candidates else None
 
     def _calc_planned_slots(self, now: datetime) -> list[str]:
-        """Return ISO timestamps of all price-mode heating slots planned."""
-        if not self.price_mode_enabled:
+        """Return ISO timestamps of all planned heating slots across upcoming shower deadlines."""
+        if self._vacation_active or not self.price_mode_enabled:
             return []
+        schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
+        if not schedules:
+            return []
+
         boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
+        heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
-        n = self._price_mode_n or self._needed_cheap_hours(boiler_temp, normal_temp)
-        if n <= 0:
-            return []
-        prices = self._get_forecast_prices(now, hours=self._effective_window_hours())
-        if not prices:
-            return []
-        slot_minutes = self._detect_slot_minutes(prices) if len(prices) >= 2 else 60
-        n_slots = n * (60 // slot_minutes)
-        slot_seconds = slot_minutes * 60
-        current_slot = now.replace(
-            minute=(now.minute // slot_minutes) * slot_minutes,
-            second=0, microsecond=0,
-        )
-        consecutive = self._opt(OPT_PRICE_MODE_CONSECUTIVE, DEFAULT_PRICE_MODE_CONSECUTIVE)
-        if consecutive:
-            best_start: datetime | None = None
-            best_cost = float("inf")
-            for i in range(len(prices) - n_slots + 1):
-                window = prices[i : i + n_slots]
-                if any(
-                    (window[j + 1][0] - window[j][0]).total_seconds() != slot_seconds
-                    for j in range(n_slots - 1)
-                ):
-                    continue
-                total = sum(p for _, p in window)
-                if total < best_cost:
-                    best_cost = total
-                    best_start = window[0][0]
-            if best_start is None:
-                return []
-            return [
-                self._to_local_slot(
-                    best_start + timedelta(minutes=slot_minutes * i), now.tzinfo, slot_minutes
-                ).isoformat()
-                for i in range(n_slots)
-            ]
-        else:
-            future_prices = [
-                (t, p) for t, p in prices
-                if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
-            ]
-            cheapest = sorted(future_prices, key=lambda x: x[1])[:n_slots]
-            return [
-                self._to_local_slot(t, now.tzinfo, slot_minutes).isoformat()
-                for t, _ in cheapest
-            ]
+        preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
+        all_slots: set[str] = set()
+
+        for shower_dt, required_temp in self._upcoming_showers(now, schedules, normal_temp):
+            hours_until = (shower_dt - now).total_seconds() / 3600
+            use_preheat = preheat_temp < required_temp and hours_until > 12.0
+            target_temp = preheat_temp if use_preheat else required_temp
+
+            if boiler_temp is not None and boiler_temp >= target_temp - self._effective_hysteresis():
+                continue
+
+            for slot in self._planned_slots_for_deadline(
+                now, shower_dt, target_temp, heat_up_min, boiler_temp
+            ):
+                all_slots.add(slot.isoformat())
+
+        return sorted(all_slots)
 
     # ------------------------------------------------------------------
     # Hardware control
