@@ -1059,6 +1059,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         return True
 
     def _calc_next_heating(self, now: datetime) -> datetime | None:
+        if self._heating:
+            return None  # already heating — card shows "Nu aan het verwarmen"
         if self._vacation_active or not self.price_mode_enabled:
             return None
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
