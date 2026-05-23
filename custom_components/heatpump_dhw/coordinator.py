@@ -410,6 +410,10 @@ class DHWCoordinator(DataUpdateCoordinator):
             )
             self._heating = actual_on
             self._last_switch_time = now
+            # Restore session start after HA restart so session tracking continues
+            if actual_on and self._session_start is None:
+                self._session_start = now
+                self._session_start_temp = None  # unknown before restart
 
     def _handle_period_resets(self, meter_kwh: float | None, now: datetime) -> None:
         """Reset monthly/yearly accumulators on rollover and sync kWh with the live meter."""
@@ -1152,13 +1156,15 @@ class DHWCoordinator(DataUpdateCoordinator):
     ) -> None:
         should_heat = mode != MODE_IDLE
 
+        # Always update the displayed mode so sensors reflect reality immediately
+        # (e.g. after a HA restart where the boiler was already heating).
+        prev_mode = self._active_mode
+        self._active_mode = mode
+
         # Anti-short-cycle: don't switch within MIN_CYCLE_MINUTES
         if self._last_switch_time is not None:
             if (now - self._last_switch_time).total_seconds() / 60 < MIN_CYCLE_MINUTES:
                 return
-
-        prev_mode = self._active_mode
-        self._active_mode = mode
 
         if should_heat != self._heating:
             self._heating = should_heat
