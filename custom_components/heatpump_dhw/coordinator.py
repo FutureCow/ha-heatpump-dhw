@@ -698,7 +698,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
     def _needed_cheap_hours(self, boiler_temp: float | None, target_temp: float) -> int:
         """Calculate how many cheap hours are needed based on learned heating rate."""
-        if boiler_temp is None or boiler_temp >= target_temp - self._effective_hysteresis():
+        if boiler_temp is None or boiler_temp >= target_temp - TEMP_HYSTERESIS:
             return 0
         delta = max(0.0, target_temp - boiler_temp)
         if self._heat_rate_samples:
@@ -875,7 +875,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             use_preheat = preheat_temp < required_temp and hours_until > 12.0
             target_temp = preheat_temp if use_preheat else required_temp
 
-            if boiler_temp is not None and boiler_temp >= target_temp - self._effective_hysteresis():
+            if boiler_temp is not None and boiler_temp >= target_temp - TEMP_HYSTERESIS:
                 continue
 
             # Emergency: heat regardless of price/predictive within 2× heat_up_min
@@ -901,7 +901,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # ── Fallback: pure price mode — heat to normal_temp during cheap hours ──
         # Applies when no shower schedule is defined, or all scheduled showers are already hot.
-        if boiler_temp is not None and boiler_temp >= normal_temp - self._effective_hysteresis():
+        if boiler_temp is not None and boiler_temp >= normal_temp - TEMP_HYSTERESIS:
             return None
 
         if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
@@ -1077,13 +1077,13 @@ class DHWCoordinator(DataUpdateCoordinator):
             hours_until = (shower_dt - now).total_seconds() / 3600
 
             # Skip entirely if boiler already at required_temp
-            if boiler_temp is not None and boiler_temp >= required_temp - self._effective_hysteresis():
+            if boiler_temp is not None and boiler_temp >= required_temp - TEMP_HYSTERESIS:
                 continue
 
             use_preheat = preheat_temp < required_temp and hours_until > 12.0
 
             # Phase 1: preheat if shower is far and preheat not yet reached
-            if use_preheat and (boiler_temp is None or boiler_temp < preheat_temp - self._effective_hysteresis()):
+            if use_preheat and (boiler_temp is None or boiler_temp < preheat_temp - TEMP_HYSTERESIS):
                 slots = self._planned_slots_for_deadline(now, shower_dt, preheat_temp, heat_up_min, boiler_temp)
                 if slots:
                     future = [s for s in slots if s > now]
@@ -1127,13 +1127,13 @@ class DHWCoordinator(DataUpdateCoordinator):
         for shower_dt, required_temp in self._upcoming_showers(now, schedules, normal_temp):
             hours_until = (shower_dt - now).total_seconds() / 3600
 
-            if boiler_temp is not None and boiler_temp >= required_temp - self._effective_hysteresis():
+            if boiler_temp is not None and boiler_temp >= required_temp - TEMP_HYSTERESIS:
                 continue
 
             use_preheat = preheat_temp < required_temp and hours_until > 12.0
 
             # Phase 1: preheat slots
-            if use_preheat and (boiler_temp is None or boiler_temp < preheat_temp - self._effective_hysteresis()):
+            if use_preheat and (boiler_temp is None or boiler_temp < preheat_temp - TEMP_HYSTERESIS):
                 for slot in self._planned_slots_for_deadline(now, shower_dt, preheat_temp, heat_up_min, boiler_temp):
                     all_slots.add(slot.isoformat())
 
@@ -1347,7 +1347,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         if (
             not self._session_notified
             and boiler_temp is not None
-            and boiler_temp >= target_temp - self._effective_hysteresis()
+            and boiler_temp >= target_temp - TEMP_HYSTERESIS
         ):
             self._session_notified = True
             duration_min = (now - self._session_start).total_seconds() / 60
