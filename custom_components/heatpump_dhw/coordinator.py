@@ -213,6 +213,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._month_start_meter = stored.get("month_start_meter")
         self._year_start_meter = stored.get("year_start_meter")
         self._last_session = stored.get("last_session", {})
+        self._session_start_temp = stored.get("session_start_temp")
 
         opts = self.entry.options
         self.solar_mode_enabled = stored.get("solar_mode_enabled", opts.get(OPT_SOLAR_MODE_ENABLED, True))
@@ -250,6 +251,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "month_start_meter": self._month_start_meter,
                 "year_start_meter": self._year_start_meter,
                 "last_session": self._last_session,
+                "session_start_temp": self._session_start_temp,
             }
         )
 
@@ -413,7 +415,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             # Restore session start after HA restart so session tracking continues
             if actual_on and self._session_start is None:
                 self._session_start = now
-                self._session_start_temp = None  # unknown before restart
+                # _session_start_temp is already restored from storage in async_setup
 
     def _handle_period_resets(self, meter_kwh: float | None, now: datetime) -> None:
         """Reset monthly/yearly accumulators on rollover and sync kWh with the live meter."""
