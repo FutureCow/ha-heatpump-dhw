@@ -46,7 +46,7 @@ SWITCHES: tuple[DHWSwitchDescription, ...] = (
     ),
     DHWSwitchDescription(
         key="vacation_mode",
-        name="Vakantie modus",
+        name="Vakantie detectie",
         icon="mdi:beach",
         attr="vacation_mode_enabled",
     ),
