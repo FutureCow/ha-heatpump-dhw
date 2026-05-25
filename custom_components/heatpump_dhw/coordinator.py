@@ -118,6 +118,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._session_notified: bool = False
         self._session_target_temp: float | None = None
         self._last_set_temp: float | None = None
+        self._prev_boiler_temp: float | None = None  # voor per-tick thermische accumulatie
 
         # Energy meter tracking
         self._energy_meter_prev: float | None = None
@@ -1184,14 +1185,16 @@ class DHWCoordinator(DataUpdateCoordinator):
                 self._session_start_temp = boiler_temp
                 self._session_start_meter = meter_kwh
                 self._energy_meter_prev = meter_kwh
-                self._last_session = {"running_kwh": 0.0, "running_cost": 0.0}
+                self._last_session = {"running_kwh": 0.0, "running_cost": 0.0, "thermal_kwh": 0.0}
                 self._session_notified = False
                 self._session_target_temp = desired_temp
+                self._prev_boiler_temp = boiler_temp
                 log = _LOGGER.debug if mode == MODE_ANTI_BLOCK else _LOGGER.info
                 log("DHW: start heating mode=%s target=%.1f°C", mode, desired_temp)
                 await self._notify(f"Boiler verwarming gestart ({mode}), doel: {desired_temp:.0f}°C")
             else:
                 await self._turn_off_heatpump()
+                self._prev_boiler_temp = None
                 log = _LOGGER.debug if prev_mode == MODE_ANTI_BLOCK else _LOGGER.info
                 log("DHW: stop heating previous_mode=%s", prev_mode)
                 self._last_session["running_kwh"] = 0.0
@@ -1330,19 +1333,24 @@ class DHWCoordinator(DataUpdateCoordinator):
         sess["kwh"] = sess["running_kwh"]
         sess["cost"] = round(sess["running_cost"], 3)
 
-        # COP = thermal energy delivered / electrical energy consumed
-        # Thermal energy: Q = volume [L] * 1 kg/L * Cp [kJ/(kg·°C)] * ΔT / 3600 → kWh
-        # Assumes uniform tank temperature (no stratification) — conservative underestimate.
+        # COP: accumulate thermal energy per tick (stored + lost to ambient).
+        # Per-tick ΔT avoids needing a stable start_temp and naturally handles
+        # multi-phase sessions (preheat → final push). Heat loss correction ensures
+        # energy delivered but lost to ambient is counted, giving a realistic COP.
         tank_vol = self._opt(OPT_TANK_VOLUME_L, DEFAULT_TANK_VOLUME_L)
-        start_temp = self._session_start_temp
-        if (
-            boiler_temp is not None
-            and start_temp is not None
-            and sess["running_kwh"] > 0
-            and boiler_temp > start_temp
-        ):
-            thermal_kwh = tank_vol * WATER_SPECIFIC_HEAT_KJ * (boiler_temp - start_temp) / 3600
-            sess["cop"] = round(thermal_kwh / sess["running_kwh"], 2)
+        if boiler_temp is not None and self._prev_boiler_temp is not None:
+            delta_t = boiler_temp - self._prev_boiler_temp
+            delta_stored = tank_vol * WATER_SPECIFIC_HEAT_KJ * delta_t / 3600
+            if self._loss_samples and outside_temp is not None:
+                k = mean(self._loss_samples)
+                delta_lost = k * (self._prev_boiler_temp - outside_temp) * (UPDATE_INTERVAL / 3600)
+            else:
+                delta_lost = 0.0
+            sess["thermal_kwh"] = max(0.0, sess.get("thermal_kwh", 0.0) + delta_stored + delta_lost)
+        self._prev_boiler_temp = boiler_temp
+
+        if sess.get("running_kwh", 0.0) > 0 and sess.get("thermal_kwh", 0.0) > 0:
+            sess["cop"] = round(sess["thermal_kwh"] / sess["running_kwh"], 2)
 
         # Session complete when boiler reaches the target set at session start.
         # Using _session_target_temp (stored at pump-on) avoids the pitfall where
