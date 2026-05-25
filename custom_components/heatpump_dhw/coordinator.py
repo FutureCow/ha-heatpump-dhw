@@ -203,7 +203,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         raw_abs = stored.get("absence_start")
         self._absence_start = datetime.fromisoformat(raw_abs) if raw_abs else None
         self._vacation_manual = stored.get("vacation_manual", False)
-        self._vacation_active = self._vacation_manual
+        self._vacation_active = stored.get("vacation_active", self._vacation_manual)
         self._monthly_kwh = stored.get("monthly_kwh", 0.0)
         self._monthly_cost = stored.get("monthly_cost", 0.0)
         self._monthly_month = stored.get("monthly_month", datetime.now().month)
@@ -252,6 +252,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "year_start_meter": self._year_start_meter,
                 "last_session": self._last_session,
                 "session_start_temp": self._session_start_temp,
+                "vacation_active": self._vacation_active,
             }
         )
 
@@ -1186,11 +1187,13 @@ class DHWCoordinator(DataUpdateCoordinator):
                 self._last_session = {"running_kwh": 0.0, "running_cost": 0.0}
                 self._session_notified = False
                 self._session_target_temp = desired_temp
-                _LOGGER.info("DHW: start heating mode=%s target=%.1f°C", mode, desired_temp)
+                log = _LOGGER.debug if mode == MODE_ANTI_BLOCK else _LOGGER.info
+                log("DHW: start heating mode=%s target=%.1f°C", mode, desired_temp)
                 await self._notify(f"Boiler verwarming gestart ({mode}), doel: {desired_temp:.0f}°C")
             else:
                 await self._turn_off_heatpump()
-                _LOGGER.info("DHW: stop heating previous_mode=%s", prev_mode)
+                log = _LOGGER.debug if prev_mode == MODE_ANTI_BLOCK else _LOGGER.info
+                log("DHW: stop heating previous_mode=%s", prev_mode)
                 self._last_session["running_kwh"] = 0.0
                 self._last_session["running_cost"] = 0.0
                 if prev_mode == MODE_LEGIONELLA:
@@ -1240,9 +1243,14 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         domain = entity_id.split(".")[0]
         try:
-            await self.hass.services.async_call(
-                domain, "set_value", {"entity_id": entity_id, "value": temp}, blocking=True
-            )
+            if domain == "climate":
+                await self.hass.services.async_call(
+                    "climate", "set_temperature", {"entity_id": entity_id, "temperature": temp}, blocking=True
+                )
+            else:
+                await self.hass.services.async_call(
+                    domain, "set_value", {"entity_id": entity_id, "value": temp}, blocking=True
+                )
             self._last_set_temp = temp
         except Exception as err:
             _LOGGER.warning("DHW: kon doeltemperatuur niet instellen op %s: %s", entity_id, err)
@@ -1324,6 +1332,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # COP = thermal energy delivered / electrical energy consumed
         # Thermal energy: Q = volume [L] * 1 kg/L * Cp [kJ/(kg·°C)] * ΔT / 3600 → kWh
+        # Assumes uniform tank temperature (no stratification) — conservative underestimate.
         tank_vol = self._opt(OPT_TANK_VOLUME_L, DEFAULT_TANK_VOLUME_L)
         start_temp = self._session_start_temp
         if (
