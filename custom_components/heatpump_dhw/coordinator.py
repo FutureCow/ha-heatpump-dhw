@@ -1165,8 +1165,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         prev_mode = self._active_mode
         self._active_mode = mode
 
-        # Anti-short-cycle: don't switch within MIN_CYCLE_MINUTES
-        if self._last_switch_time is not None:
+        # Anti-short-cycle: don't switch within MIN_CYCLE_MINUTES.
+        # Legionella and anti-block are safety/maintenance modes — never delay them.
+        if self._last_switch_time is not None and mode not in (MODE_ANTI_BLOCK, MODE_LEGIONELLA):
             if (now - self._last_switch_time).total_seconds() / 60 < MIN_CYCLE_MINUTES:
                 return
 
