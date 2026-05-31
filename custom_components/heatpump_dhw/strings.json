@@ -6,7 +6,8 @@
         "description": "Selecteer de sensoren van je warmtepomp boiler.",
         "data": {
           "boiler_temp_sensor": "Boiler watertemperatuur sensor",
-          "power_sensor": "Vermogen/verbruik sensor (optioneel)"
+          "power_sensor": "Vermogen/verbruik sensor (optioneel)",
+          "energy_meter_sensor": "Energiemeter sensor (kWh, optioneel — nauwkeuriger dan vermogenssensor)"
         }
       },
       "controls": {
@@ -16,7 +17,7 @@
           "target_temp_entity": "Gewenste temperatuur instelling",
           "heatpump_switch": "Warmtepomp aan/uit schakelaar",
           "eheater_switch": "Elektrisch element schakelaar (optioneel)",
-          "eheater_boost_temp_entity": "Boost temperatuur instelling (optioneel)"
+          "eheater_setpoint_entity": "Elektrisch element setpoint entiteit (optioneel — voor boilers die een apart setpoint nodig hebben om het elektrisch element te activeren)"
         }
       },
       "grid": {
@@ -51,7 +52,7 @@
           "price_threshold_eur": "Maximale prijs voor verwarming (€/kWh)",
           "cheap_hours": "Uren prijsmodus fallback (0=auto, gebruikt zolang verwarmingssnelheid nog niet geleerd is)",
           "price_window_hours": "Prijsvenster douche schema (uur, 0 = volledige beschikbare forecast)",
-          "tank_loss_rate": "Warmteverlies tank (°C/u, wordt automatisch bijgeleerd u2014 handmatige startwaarde)",
+          "tank_loss_rate": "Warmteverlies tank (°C/u, wordt automatisch bijgeleerd — handmatige startwaarde)",
           "normal_temp": "Normale doeltemperatuur (°C)",
           "boost_temp": "Boost doeltemperatuur (°C)",
           "vacation_min_temp": "Vakantie minimumtemperatuur (°C)",
@@ -60,10 +61,11 @@
           "legionella_temp": "Legionella run temperatuur (°C)",
           "legionella_day": "Dag van legionella run",
           "legionella_hour": "Uur van legionella run",
-
           "tank_volume_l": "Tankvolume (L, voor COP berekening)",
           "anti_block_days": "Anti-blokkeer: max. dagen zonder run",
-          "predictive_heating": "Voorspellend verwarmen (sla prijsmodus over als morgen zon verwacht)"
+          "predictive_heating": "Voorspellend verwarmen (sla prijsmodus over als morgen zon verwacht)",
+          "price_mode_consecutive": "Prijsmodus: verwarmen in goedkoopste aaneengesloten blok (in plaats van goedkoopste losse uren)",
+          "boiler_setpoint_offset": "Boiler activeringsdrempel (°C onder setpoint, 0 = uit)"
         }
       }
     }
@@ -82,6 +84,7 @@
         "data": {
           "price_forecast_sensor": "Prijsvoorspelling sensor (optioneel)",
           "dynamic_price_sensor": "Huidige prijs sensor (optioneel)",
+          "energy_meter_sensor": "Energiemeter sensor (kWh, optioneel)",
           "solar_mode_enabled": "Zonne-energie modus",
           "solar_threshold_w": "Min. overschot voor zonne-modus (W)",
           "boost_mode_enabled": "Boost modus",
@@ -90,7 +93,7 @@
           "price_threshold_eur": "Maximale prijs (€/kWh)",
           "cheap_hours": "Uren prijsmodus fallback (0=auto, gebruikt zolang verwarmingssnelheid nog niet geleerd is)",
           "price_window_hours": "Prijsvenster douche schema (uur, 0 = volledige beschikbare forecast)",
-          "tank_loss_rate": "Warmteverlies tank (°C/u, wordt automatisch bijgeleerd u2014 handmatige startwaarde)",
+          "tank_loss_rate": "Warmteverlies tank (°C/u, wordt automatisch bijgeleerd — handmatige startwaarde)",
           "normal_temp": "Normale doeltemperatuur (°C)",
           "boost_temp": "Boost temperatuur (°C)",
           "vacation_min_temp": "Vakantie minimumtemperatuur (°C)",
@@ -99,10 +102,11 @@
           "legionella_temp": "Legionella temperatuur (°C)",
           "legionella_day": "Dag van legionella run",
           "legionella_hour": "Uur van legionella run",
-
           "tank_volume_l": "Tankvolume (L)",
           "anti_block_days": "Anti-blokkeer interval (dagen)",
-          "predictive_heating": "Voorspellend verwarmen"
+          "predictive_heating": "Voorspellend verwarmen",
+          "price_mode_consecutive": "Prijsmodus: goedkoopste aaneengesloten blok",
+          "boiler_setpoint_offset": "Boiler activeringsdrempel (°C onder setpoint)"
         }
       },
       "shower_schedules": {
