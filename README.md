@@ -229,7 +229,7 @@ Alle onderstaande opties zijn instelbaar via **Instellingen → Integraties → 
 | Instelling | Standaard | Beschrijving |
 |-----------|-----------|-------------|
 | Dynamische prijs modus | aan | Verwarmt in de goedkoopste uren |
-| Maximale prijs (€/kWh) | `0.10` | Bovengrens: verwarmt alleen als prijs ≤ deze waarde (fallback zonder forecast) |
+| Maximale prijs (€/kWh) | `0.08` | Bovengrens: verwarmt alleen als prijs ≤ deze waarde (fallback zonder forecast) |
 | Uren prijsmodus fallback | `2` | Aantal goedkoopste uren als de verwarmingssnelheid nog niet geleerd is (`0` = automatisch op basis van geleerde snelheid) |
 | Prijsvenster douche schema (uur) | `24` | Hoe ver vooruit de forecast doorzocht wordt voor douche-planning (`0` = volledige beschikbare forecast) |
 | Prijsmodus: goedkoopste aaneengesloten blok | uit | Als aan: verwarmt in het goedkoopste aaneengesloten blok in plaats van losse goedkoopste uren |
