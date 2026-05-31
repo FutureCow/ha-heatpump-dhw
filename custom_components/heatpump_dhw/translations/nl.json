@@ -24,7 +24,6 @@
         "title": "Stap 3: Zon & dynamische prijzen",
         "description": "Selecteer de sensoren voor zonne-energie en stroomprijs.",
         "data": {
-          "pv_production_sensor": "PV opwekking sensor (W)",
           "pv_surplus_sensor": "PV overschot sensor (W)",
           "dynamic_price_sensor": "Huidige stroomprijs sensor (€/kWh)",
           "price_forecast_sensor": "Prijsvoorspelling sensor (optioneel)"
