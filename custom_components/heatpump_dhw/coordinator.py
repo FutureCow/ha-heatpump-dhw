@@ -884,10 +884,6 @@ class DHWCoordinator(DataUpdateCoordinator):
             if hours_until * 60 <= 2 * heat_up_min:
                 return MODE_SCHEDULE, required_temp
 
-            # Keep active session running — don't interrupt for new prices
-            if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
-                return MODE_SCHEDULE, target_temp
-
             if skip_predictive:
                 continue
 
@@ -897,9 +893,13 @@ class DHWCoordinator(DataUpdateCoordinator):
             if result is True:
                 return MODE_SCHEDULE, target_temp
             if result is None:
-                # No forecast — fixed fallback: start within heat_up_min + 10 min of shower
+                # No forecast — keep running if already heating to avoid false interruption,
+                # otherwise fall back to fixed window near shower time.
+                if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
+                    return MODE_SCHEDULE, target_temp
                 if (shower_dt - now).total_seconds() / 60 <= heat_up_min + 10:
                     return MODE_SCHEDULE, required_temp
+            # result is False: current slot is not a planned cheap slot → stop/don't start
 
         # ── Fallback: pure price mode — heat to normal_temp during cheap hours ──
         # Applies when no shower schedule is defined, or all scheduled showers are already hot.
