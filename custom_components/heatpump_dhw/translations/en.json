@@ -24,7 +24,6 @@
         "title": "Step 3: Solar & dynamic prices",
         "description": "Select the sensors for solar energy and electricity price.",
         "data": {
-          "pv_production_sensor": "PV production sensor (W)",
           "pv_surplus_sensor": "PV surplus sensor (W)",
           "dynamic_price_sensor": "Current electricity price sensor (€/kWh)",
           "price_forecast_sensor": "Price forecast sensor (optional)"
