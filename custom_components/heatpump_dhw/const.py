@@ -104,6 +104,11 @@ MIN_CYCLE_MINUTES = 5
 # Anti-block run duration in minutes
 ANTI_BLOCK_RUN_MINUTES = 5
 
+# Safety ceiling for one legionella run: once triggered, heating continues past
+# the trigger hour until leg_temp is reached, but never longer than this — in
+# case a stuck sensor or hardware fault would otherwise heat indefinitely.
+LEGIONELLA_MAX_RUN_MINUTES = 300
+
 # Weather condition strings considered "sunny" for predictive heating
 SUNNY_CONDITIONS = {"sunny", "partlycloudy", "clear-night"}
 

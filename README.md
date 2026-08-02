@@ -256,6 +256,8 @@ Alle onderstaande opties zijn instelbaar via **Instellingen → Integraties → 
 | Dag van legionella run | zondag | Dag van de week |
 | Uur van legionella run | `13` | Uur van de dag (0–23) |
 
+> **Doorlooptijd:** de run start op het ingestelde dag/uur, maar stopt pas zodra de doeltemperatuur echt bereikt is — ook als dat langer duurt dan het gestarte uur (bijv. door een trage opwarmsnelheid of een douche tijdens de run). Als de doeltemperatuur na 5 uur nog niet gehaald is, stopt de run met een waarschuwingsmelding in plaats van een "voltooid"-melding, en wordt er pas weer geprobeerd bij de eerstvolgende geplande cyclus.
+
 ### Slim leren & energiebeheer
 
 | Instelling | Standaard | Beschrijving |
