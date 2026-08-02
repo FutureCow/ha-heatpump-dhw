@@ -54,6 +54,7 @@ from .const import (
     OPT_TANK_LOSS_RATE,
     DOMAIN,
     HEAT_UP_SAMPLE_SIZE,
+    LEGIONELLA_MAX_RUN_MINUTES,
     MIN_CYCLE_MINUTES,
     MODE_ANTI_BLOCK,
     MODE_BOOST,
@@ -131,6 +132,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._loss_samples: list[float] = []  # °C/hour tank heat loss measurements
         self._heat_rate_samples: list[float] = []  # °C/hour heating rate measurements
         self._last_legionella_run: datetime | None = None
+        self._legionella_active: bool = False
+        self._legionella_start: datetime | None = None
+        self._legionella_timed_out: bool = False
         self._last_pump_run: datetime | None = None
         self._monthly_kwh: float = 0.0
         self._monthly_cost: float = 0.0
@@ -199,6 +203,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._heat_rate_samples = stored.get("heat_rate_samples", [])
         raw_ll = stored.get("last_legionella_run")
         self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
+        self._legionella_active = stored.get("legionella_active", False)
+        raw_ls = stored.get("legionella_start")
+        self._legionella_start = datetime.fromisoformat(raw_ls) if raw_ls else None
         raw_lp = stored.get("last_pump_run")
         self._last_pump_run = datetime.fromisoformat(raw_lp) if raw_lp else None
         raw_abs = stored.get("absence_start")
@@ -235,6 +242,8 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "loss_samples": self._loss_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "heat_rate_samples": self._heat_rate_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "last_legionella_run": self._last_legionella_run.isoformat() if self._last_legionella_run else None,
+                "legionella_active": self._legionella_active,
+                "legionella_start": self._legionella_start.isoformat() if self._legionella_start else None,
                 "last_pump_run": self._last_pump_run.isoformat() if self._last_pump_run else None,
                 "absence_start": self._absence_start.isoformat() if self._absence_start else None,
                 "vacation_manual": self._vacation_manual,
@@ -986,11 +995,46 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._anti_block_start = None
             self._last_pump_run = now
 
-        # 2. Legionella — weekly safety run
-        if self.legionella_mode_enabled and self._is_legionella_time(now):
+        # 2. Legionella — weekly safety run. Once triggered at the scheduled
+        # day/hour, keeps heating until leg_temp is actually reached (or a
+        # safety timeout expires) — independent of the wall-clock hour that
+        # started it. This matters because reaching leg_temp can take longer
+        # than one hour (measured heat rate is often only a few °C/h, and a
+        # shower drawing hot water mid-run makes it slower still); cutting
+        # the run off at the hour boundary regardless of temperature was the
+        # original bug — it looked like it ran, but never finished.
+        if self.legionella_mode_enabled:
             leg_temp = self._opt(OPT_LEGIONELLA_TEMP, DEFAULT_LEGIONELLA_TEMP)
-            if boiler_temp is None or boiler_temp < leg_temp - self._effective_hysteresis():
-                return MODE_LEGIONELLA, leg_temp
+
+            if not self._legionella_active and self._legionella_trigger_due(now):
+                self._legionella_active = True
+                self._legionella_start = now
+                self._legionella_timed_out = False
+
+            if self._legionella_active:
+                target_reached = (
+                    boiler_temp is not None
+                    and boiler_temp >= leg_temp - self._effective_hysteresis()
+                )
+                elapsed_min = (now - self._legionella_start).total_seconds() / 60
+                timed_out = elapsed_min >= LEGIONELLA_MAX_RUN_MINUTES
+
+                if target_reached:
+                    self._legionella_active = False
+                    self._legionella_start = None
+                    self._last_legionella_run = now
+                elif timed_out:
+                    self._legionella_active = False
+                    self._legionella_start = None
+                    self._legionella_timed_out = True
+                    _LOGGER.warning(
+                        "DHW: legionella-cyclus gestopt na %.0f min zonder %.1f°C "
+                        "te bereiken (boiler op %s°C) — probeert volgende cyclus opnieuw",
+                        elapsed_min, leg_temp,
+                        f"{boiler_temp:.1f}" if boiler_temp is not None else "?",
+                    )
+                else:
+                    return MODE_LEGIONELLA, leg_temp
 
         # 3. Vacation status — detect before boost/solar/price so those modes respect it
         if self.vacation_mode_enabled and not self._vacation_manual:
@@ -1051,7 +1095,13 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         return MODE_IDLE, normal_temp
 
-    def _is_legionella_time(self, now: datetime) -> bool:
+    def _legionella_trigger_due(self, now: datetime) -> bool:
+        """True once per configured day/hour, gated by the cooldown since the last SUCCESSFUL run.
+
+        Only starts a new cycle — once started, `_decide_mode` keeps it running
+        past this hour via `self._legionella_active` until leg_temp is reached
+        or the safety timeout fires.
+        """
         ll_day = int(self._opt(OPT_LEGIONELLA_DAY, DEFAULT_LEGIONELLA_DAY))
         ll_hour = int(self._opt(OPT_LEGIONELLA_HOUR, DEFAULT_LEGIONELLA_HOUR))
         if now.weekday() != ll_day or now.hour != ll_hour:
@@ -1200,8 +1250,13 @@ class DHWCoordinator(DataUpdateCoordinator):
                 self._last_session["running_kwh"] = 0.0
                 self._last_session["running_cost"] = 0.0
                 if prev_mode == MODE_LEGIONELLA:
-                    self._last_legionella_run = now
-                    await self._notify("Legionella preventie run voltooid.")
+                    if self._legionella_timed_out:
+                        await self._notify(
+                            "⚠️ Legionella preventie niet voltooid: doeltemperatuur "
+                            "niet bereikt binnen de veiligheidslimiet."
+                        )
+                    else:
+                        await self._notify("Legionella preventie run voltooid.")
                 if prev_mode == MODE_ANTI_BLOCK:
                     self._last_pump_run = now
 
