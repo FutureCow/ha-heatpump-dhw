@@ -114,3 +114,14 @@ SUNNY_CONDITIONS = {"sunny", "partlycloudy", "clear-night"}
 
 # Specific heat of water: kJ per kg per °C
 WATER_SPECIFIC_HEAT_KJ = 4.186
+
+# Temperature-dependent heat-rate curve learning.
+# A heat pump's output drops as the tank approaches setpoint (lower COP at
+# higher condensing temperature), so a single flat average °C/h rate
+# understates how fast it heats from cold and overstates how fast it heats
+# near the target. Bucketing measured rates by water temperature captures
+# that curve instead.
+HEAT_RATE_BUCKET_SIZE_C = 5.0  # width of each temperature bucket, °C
+HEAT_RATE_BUCKET_SAMPLE_SIZE = 5  # rolling samples kept per bucket
+HEAT_RATE_SAMPLE_MIN_HOURS = 0.25  # minimum elapsed time (15 min) before committing a sample
+DEFAULT_HEAT_RATE = 5.0  # °C/h fallback when no curve data is learned yet
