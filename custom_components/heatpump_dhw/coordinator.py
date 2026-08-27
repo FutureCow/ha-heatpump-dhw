@@ -34,6 +34,7 @@ from .const import (
     DEFAULT_ANTI_BLOCK_DAYS,
     DEFAULT_BOOST_TEMP,
     DEFAULT_BOILER_SETPOINT_OFFSET,
+    DEFAULT_HEAT_RATE,
     DEFAULT_PRICE_MODE_CONSECUTIVE,
     DEFAULT_AMBIENT_TEMP,
     DEFAULT_TANK_LOSS_RATE,
@@ -53,6 +54,9 @@ from .const import (
     OPT_PRICE_MODE_CONSECUTIVE,
     OPT_TANK_LOSS_RATE,
     DOMAIN,
+    HEAT_RATE_BUCKET_SAMPLE_SIZE,
+    HEAT_RATE_BUCKET_SIZE_C,
+    HEAT_RATE_SAMPLE_MIN_HOURS,
     HEAT_UP_SAMPLE_SIZE,
     LEGIONELLA_MAX_RUN_MINUTES,
     MIN_CYCLE_MINUTES,
@@ -131,6 +135,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._cop_samples: list[float] = []
         self._loss_samples: list[float] = []  # °C/hour tank heat loss measurements
         self._heat_rate_samples: list[float] = []  # °C/hour heating rate measurements
+        self._heat_rate_by_temp: dict[int, list[float]] = {}  # bucket floor °C -> rate samples
+        self._last_heat_rate_temp: float | None = None  # baseline for curve learning
+        self._last_heat_rate_time: datetime | None = None
         self._last_legionella_run: datetime | None = None
         self._legionella_active: bool = False
         self._legionella_start: datetime | None = None
@@ -201,6 +208,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         else:
             self._loss_samples = []
         self._heat_rate_samples = stored.get("heat_rate_samples", [])
+        raw_curve = stored.get("heat_rate_by_temp", {})
+        self._heat_rate_by_temp = {int(k): v for k, v in raw_curve.items()}
         raw_ll = stored.get("last_legionella_run")
         self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
         self._legionella_active = stored.get("legionella_active", False)
@@ -241,6 +250,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "cop_samples": self._cop_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "loss_samples": self._loss_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "heat_rate_samples": self._heat_rate_samples[-HEAT_UP_SAMPLE_SIZE:],
+                "heat_rate_by_temp": {str(k): v for k, v in self._heat_rate_by_temp.items()},
                 "last_legionella_run": self._last_legionella_run.isoformat() if self._last_legionella_run else None,
                 "legionella_active": self._legionella_active,
                 "legionella_start": self._legionella_start.isoformat() if self._legionella_start else None,
@@ -363,6 +373,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         self._energy_meter_prev = meter_kwh
         self._learn_heat_loss(boiler_temp, now, outside_temp)
+        self._learn_heat_rate_curve(boiler_temp, now)
         await self._check_shower_readiness(now, boiler_temp)
 
         self._next_heating = self._calc_next_heating(now)
@@ -546,6 +557,75 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._last_idle_temp = boiler_temp
             self._last_idle_time = now
 
+    def _learn_heat_rate_curve(self, boiler_temp: float | None, now: datetime) -> None:
+        """Measure heating rate (°C/h) as a function of water temperature.
+
+        A heat pump's output falls as the tank approaches setpoint (lower COP
+        at higher condensing temperature), so a single flat average rate
+        understates how fast it heats from cold and overstates how fast it
+        heats near the target — which in turn overstates how many "cheap
+        hours" are needed and pulls price-mode heating into more expensive
+        hours than necessary. Bucketing measured rates by temperature and
+        integrating over them (see `_estimate_heatup_hours`) captures the
+        curve instead.
+        """
+        if not self._heating:
+            # Pump stopped: invalidate baseline so the next session starts fresh.
+            self._last_heat_rate_temp = None
+            self._last_heat_rate_time = None
+            return
+        if boiler_temp is None:
+            # Sensor temporarily unavailable — preserve the baseline so a
+            # brief blip doesn't discard the in-progress measurement.
+            return
+
+        if self._last_heat_rate_temp is None:
+            self._last_heat_rate_temp = boiler_temp
+            self._last_heat_rate_time = now
+            return
+
+        elapsed_hours = (now - self._last_heat_rate_time).total_seconds() / 3600
+        if elapsed_hours >= HEAT_RATE_SAMPLE_MIN_HOURS:
+            rise = boiler_temp - self._last_heat_rate_temp
+            if rise > 0:
+                rate = rise / elapsed_hours  # °C/h over this interval
+                if 0.5 <= rate <= 50.0:  # sanity bounds
+                    avg_temp = (self._last_heat_rate_temp + boiler_temp) / 2
+                    bucket = int(avg_temp // HEAT_RATE_BUCKET_SIZE_C) * HEAT_RATE_BUCKET_SIZE_C
+                    samples = self._heat_rate_by_temp.setdefault(bucket, [])
+                    samples.append(rate)
+                    if len(samples) > HEAT_RATE_BUCKET_SAMPLE_SIZE:
+                        samples.pop(0)
+            self._last_heat_rate_temp = boiler_temp
+            self._last_heat_rate_time = now
+
+    def _estimate_heatup_hours(self, start_temp: float, target_temp: float) -> float:
+        """Integrate the learned temperature-dependent heat-rate curve.
+
+        Steps through the range in HEAT_RATE_BUCKET_SIZE_C increments, using
+        the measured rate for whichever bucket each step falls in. Buckets
+        without direct measurements fall back to the overall learned average,
+        or a conservative flat default if nothing has been learned yet.
+        """
+        if self._heat_rate_by_temp:
+            all_samples = [s for samples in self._heat_rate_by_temp.values() for s in samples]
+            overall_fallback = mean(all_samples)
+        elif self._heat_rate_samples:
+            overall_fallback = mean(self._heat_rate_samples)
+        else:
+            overall_fallback = DEFAULT_HEAT_RATE
+
+        hours = 0.0
+        temp = start_temp
+        while temp < target_temp - 1e-6:
+            step = min(HEAT_RATE_BUCKET_SIZE_C, target_temp - temp)
+            bucket = int((temp + step / 2) // HEAT_RATE_BUCKET_SIZE_C) * HEAT_RATE_BUCKET_SIZE_C
+            samples = self._heat_rate_by_temp.get(bucket)
+            rate = mean(samples) if samples else overall_fallback
+            hours += step / max(rate, 0.1)
+            temp += step
+        return hours
+
     def _loss_rate_at(self, temp: float, outside_temp: float | None) -> float:
         """Return heat loss rate (°C/h) at given water temperature."""
         ambient = outside_temp if outside_temp is not None else DEFAULT_AMBIENT_TEMP
@@ -708,15 +788,17 @@ class DHWCoordinator(DataUpdateCoordinator):
         return sorted(result, key=lambda x: x[0])
 
     def _needed_cheap_hours(self, boiler_temp: float | None, target_temp: float) -> int:
-        """Calculate how many cheap hours are needed based on learned heating rate."""
+        """Calculate how many cheap hours are needed based on the learned heat-rate curve.
+
+        Uses `_estimate_heatup_hours` (temperature-bucketed rates) rather than
+        a single flat average, since heating from cold is measurably faster
+        than the final approach to setpoint — a flat average overstates hours
+        needed for a cold start and understates them for a near-target top-up.
+        """
         if boiler_temp is None or boiler_temp >= target_temp - TEMP_HYSTERESIS:
             return 0
-        delta = max(0.0, target_temp - boiler_temp)
-        if self._heat_rate_samples:
-            rate = mean(self._heat_rate_samples)  # °C/hour
-            return max(1, math.ceil(delta / rate))
-        # No rate data yet: estimate at a conservative 5 °C/h (typical heat-pump DHW rate).
-        return max(1, math.ceil(delta / 5.0))
+        hours = self._estimate_heatup_hours(boiler_temp, target_temp)
+        return max(1, math.ceil(hours))
 
     def _upcoming_showers(
         self, now: datetime, schedules: list[dict], normal_temp: float, hours: int = 48
