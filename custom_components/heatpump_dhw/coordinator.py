@@ -495,6 +495,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         meter_kwh: float | None,
     ) -> dict[str, Any]:
         """Build the data dictionary returned to HA sensor/switch entities."""
+        curve_rates, curve_counts = self._curve_summary()
         return {
             "boiler_temp": boiler_temp,
             "power_w": power_w,
@@ -529,7 +530,16 @@ class DHWCoordinator(DataUpdateCoordinator):
             "learned_loss_rate": round(self._loss_rate_at(
                 float(self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)), outside_temp
             ), 2) if self._loss_samples else None,
-            "learned_heat_rate": round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None,
+            "learned_heat_rate": self._current_heat_rate(boiler_temp),
+            "heat_rate_curve": curve_rates,
+            "heat_rate_samples_per_bucket": curve_counts,
+            "heat_rate_current_bucket": (
+                int(self._bucket_for(boiler_temp)) if boiler_temp is not None else None
+            ),
+            "heat_rate_to_target": self._rate_to_target(boiler_temp, desired_temp),
+            "heat_rate_session_average": (
+                round(mean(self._heat_rate_samples), 1) if self._heat_rate_samples else None
+            ),
             "status_text": self._build_status_text(
                 boiler_temp, surplus_w, price_eur, outside_temp, desired_temp
             ),
@@ -657,6 +667,50 @@ class DHWCoordinator(DataUpdateCoordinator):
         if boiler_temp >= target_temp - TEMP_HYSTERESIS:
             return 0.0
         return self._estimate_heatup_hours(boiler_temp, target_temp) * 60.0
+
+    def _bucket_for(self, temp: float) -> float:
+        """Bucket floor for a water temperature, matching the learning code."""
+        return int(temp // HEAT_RATE_BUCKET_SIZE_C) * HEAT_RATE_BUCKET_SIZE_C
+
+    def _current_heat_rate(self, boiler_temp: float | None) -> float | None:
+        """Learned heating rate (°C/h) for the band the tank is in right now.
+
+        Reports what the pump actually achieves at this water temperature. The
+        old session average divided the temperature rise by wall-clock session
+        length, so every pause waiting for solar surplus or the anti-cycle timer
+        counted as heating time and pushed the figure far below reality.
+        """
+        if boiler_temp is not None:
+            samples = self._heat_rate_by_temp.get(self._bucket_for(boiler_temp))
+            if samples:
+                return round(mean(samples), 1)
+        all_samples = [r for v in self._heat_rate_by_temp.values() for r in v]
+        if all_samples:
+            return round(mean(all_samples), 1)
+        if self._heat_rate_samples:
+            return round(mean(self._heat_rate_samples), 1)
+        return None
+
+    def _rate_to_target(self, boiler_temp: float | None, target_temp: float) -> float | None:
+        """Average °C/h the curve implies for the remaining heat-up to target."""
+        if boiler_temp is None or boiler_temp >= target_temp - TEMP_HYSTERESIS:
+            return None
+        hours = self._estimate_heatup_hours(boiler_temp, target_temp)
+        if hours <= 0:
+            return None
+        return round((target_temp - boiler_temp) / hours, 1)
+
+    def _curve_summary(self) -> tuple[dict[str, float], dict[str, int]]:
+        """Learned curve and per-bucket sample counts, keyed by bucket floor."""
+        curve: dict[str, float] = {}
+        counts: dict[str, int] = {}
+        for bucket, samples in sorted(self._heat_rate_by_temp.items()):
+            if not samples:
+                continue
+            key = str(int(bucket))
+            curve[key] = round(mean(samples), 1)
+            counts[key] = len(samples)
+        return curve, counts
 
     def _loss_rate_at(self, temp: float, outside_temp: float | None) -> float:
         """Return heat loss rate (°C/h) at given water temperature."""
