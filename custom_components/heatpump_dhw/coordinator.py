@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
 
 from .const import (
+    DEADLINE_BUFFER_MINUTES,
     ANTI_BLOCK_RUN_MINUTES,
     CONF_BOILER_TEMP_SENSOR,
     CONF_DYNAMIC_PRICE_SENSOR,
@@ -57,9 +58,11 @@ from .const import (
     HEAT_RATE_BUCKET_SAMPLE_SIZE,
     HEAT_RATE_BUCKET_SIZE_C,
     HEAT_RATE_SAMPLE_MIN_HOURS,
+    HEAT_RATE_SAMPLE_MIN_RATE,
     HEAT_UP_SAMPLE_SIZE,
     LEGIONELLA_MAX_RUN_MINUTES,
     MIN_CYCLE_MINUTES,
+    MIN_HEAT_UP_SAMPLE_MINUTES,
     MODE_ANTI_BLOCK,
     MODE_BOOST,
     MODE_IDLE,
@@ -209,7 +212,21 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._loss_samples = []
         self._heat_rate_samples = stored.get("heat_rate_samples", [])
         raw_curve = stored.get("heat_rate_by_temp", {})
-        self._heat_rate_by_temp = {int(k): v for k, v in raw_curve.items()}
+        # Bucket keys are floats, so they persist as str(25.0) == "25.0" — int()
+        # raises ValueError on that, which async_setup_entry turns into a permanent
+        # ConfigEntryNotReady retry loop. Parse as float; int and float keys hash
+        # equal in Python, so existing "25"-style keys keep working too.
+        # Also drop samples below the current floor. The old 0.5 °C/h bound let
+        # throttled and coasting intervals into the curve, and a rolling window of
+        # five keeps them influencing estimates for days after the bound is raised.
+        self._heat_rate_by_temp = {
+            bucket: kept
+            for bucket, kept in (
+                (float(k), [r for r in v if r >= HEAT_RATE_SAMPLE_MIN_RATE])
+                for k, v in raw_curve.items()
+            )
+            if kept
+        }
         raw_ll = stored.get("last_legionella_run")
         self._last_legionella_run = datetime.fromisoformat(raw_ll) if raw_ll else None
         self._legionella_active = stored.get("legionella_active", False)
@@ -589,7 +606,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             rise = boiler_temp - self._last_heat_rate_temp
             if rise > 0:
                 rate = rise / elapsed_hours  # °C/h over this interval
-                if 0.5 <= rate <= 50.0:  # sanity bounds
+                if HEAT_RATE_SAMPLE_MIN_RATE <= rate <= 50.0:  # sanity bounds
                     avg_temp = (self._last_heat_rate_temp + boiler_temp) / 2
                     bucket = int(avg_temp // HEAT_RATE_BUCKET_SIZE_C) * HEAT_RATE_BUCKET_SIZE_C
                     samples = self._heat_rate_by_temp.setdefault(bucket, [])
@@ -625,6 +642,21 @@ class DHWCoordinator(DataUpdateCoordinator):
             hours += step / max(rate, 0.1)
             temp += step
         return hours
+
+    def _heat_up_minutes(self, boiler_temp: float | None, target_temp: float) -> float:
+        """Minutes needed to reach target_temp from the current tank temperature.
+
+        Deadline planning must scale with how cold the tank actually is. The old
+        `mean(self._heat_up_samples)` mixed cold starts with near-target top-ups
+        into one flat number, so a tank at 25 °C and a tank at 50 °C were both
+        planned as if they needed the same time. Falls back to that session
+        average only when the tank temperature is unknown.
+        """
+        if boiler_temp is None:
+            return mean(self._heat_up_samples) if self._heat_up_samples else 60.0
+        if boiler_temp >= target_temp - TEMP_HYSTERESIS:
+            return 0.0
+        return self._estimate_heatup_hours(boiler_temp, target_temp) * 60.0
 
     def _loss_rate_at(self, temp: float, outside_temp: float | None) -> float:
         """Return heat loss rate (°C/h) at given water temperature."""
@@ -827,14 +859,16 @@ class DHWCoordinator(DataUpdateCoordinator):
         now: datetime,
         shower_dt: datetime,
         target_temp: float,
-        heat_up_min: float,
         boiler_temp: float | None,
     ) -> bool | None:
         """Return True if now is a cheap heating slot for shower_dt, None if no forecast."""
         n_needed = self._needed_cheap_hours(boiler_temp, target_temp)
         if n_needed == 0:
             return False
-        window_end = shower_dt - timedelta(minutes=heat_up_min)
+        # Only a safety buffer — n_needed above already covers the heating hours.
+        # Subtracting a full heat-up here as well would count the same time twice
+        # and drag the block another heat-up-length earlier than necessary.
+        window_end = shower_dt - timedelta(minutes=DEADLINE_BUFFER_MINUTES)
         if window_end <= now:
             return False
         hours_to_end = math.ceil((window_end - now).total_seconds() / 3600) + 1
@@ -849,7 +883,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         feasible = [
             (t, p) for t, p in prices
             if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
-            and t + timedelta(minutes=heat_up_min) <= shower_dt
+            and t + timedelta(minutes=DEADLINE_BUFFER_MINUTES) <= shower_dt
         ]
         if not feasible:
             return None
@@ -888,14 +922,16 @@ class DHWCoordinator(DataUpdateCoordinator):
         now: datetime,
         shower_dt: datetime,
         target_temp: float,
-        heat_up_min: float,
         boiler_temp: float | None,
     ) -> list[datetime]:
         """Return sorted list of planned heating slot datetimes for a shower deadline."""
         n_needed = self._needed_cheap_hours(boiler_temp, target_temp)
         if n_needed == 0:
             return []
-        window_end = shower_dt - timedelta(minutes=heat_up_min)
+        # Only a safety buffer — n_needed above already covers the heating hours.
+        # Subtracting a full heat-up here as well would count the same time twice
+        # and drag the block another heat-up-length earlier than necessary.
+        window_end = shower_dt - timedelta(minutes=DEADLINE_BUFFER_MINUTES)
         if window_end <= now:
             return []
         hours_to_end = math.ceil((window_end - now).total_seconds() / 3600) + 1
@@ -910,7 +946,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         feasible = [
             (t, p) for t, p in prices
             if self._to_local_slot(t, now.tzinfo, slot_minutes) >= current_slot
-            and t + timedelta(minutes=heat_up_min) <= shower_dt
+            and t + timedelta(minutes=DEADLINE_BUFFER_MINUTES) <= shower_dt
         ]
         if not feasible:
             return []
@@ -954,12 +990,13 @@ class DHWCoordinator(DataUpdateCoordinator):
     ) -> tuple[str, float] | None:
         """Deadline-aware price + schedule mode (merged).
 
-        For each upcoming shower finds cheapest hours in [now .. deadline - heat_up_min].
-        Emergency heating fires within 2× heat_up_min regardless of price or predictive flag.
+        For each upcoming shower finds cheapest hours in [now .. deadline - buffer],
+        with the number of hours derived from the learned heat-rate curve.
+        Emergency heating fires within 2x the estimated heat-up time regardless of
+        price or predictive flag.
         Returns (MODE_SCHEDULE, target_temp) or None.
         """
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
-        heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
         upcoming = self._upcoming_showers(now, schedules, normal_temp)
 
@@ -971,15 +1008,17 @@ class DHWCoordinator(DataUpdateCoordinator):
             if boiler_temp is not None and boiler_temp >= target_temp - TEMP_HYSTERESIS:
                 continue
 
-            # Emergency: heat regardless of price/predictive within 2× heat_up_min
-            if hours_until * 60 <= 2 * heat_up_min:
+            # Emergency: heat regardless of price/predictive within 2× the time
+            # actually needed to reach shower temperature from the current tank temp.
+            heat_up_required = self._heat_up_minutes(boiler_temp, required_temp)
+            if hours_until * 60 <= 2 * heat_up_required:
                 return MODE_SCHEDULE, required_temp
 
             if skip_predictive:
                 continue
 
             result = self._in_cheap_slot_for_deadline(
-                now, shower_dt, target_temp, heat_up_min, boiler_temp
+                now, shower_dt, target_temp, boiler_temp
             )
             if result is True:
                 return MODE_SCHEDULE, target_temp
@@ -988,7 +1027,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 # otherwise fall back to fixed window near shower time.
                 if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
                     return MODE_SCHEDULE, target_temp
-                if (shower_dt - now).total_seconds() / 60 <= heat_up_min + 10:
+                if (shower_dt - now).total_seconds() / 60 <= heat_up_required + 10:
                     return MODE_SCHEDULE, required_temp
             # result is False: current slot is not a planned cheap slot → stop/don't start
 
@@ -1004,7 +1043,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             return None
 
         price_deadline = now + timedelta(hours=24)
-        result = self._in_cheap_slot_for_deadline(now, price_deadline, normal_temp, heat_up_min, boiler_temp)
+        result = self._in_cheap_slot_for_deadline(now, price_deadline, normal_temp, boiler_temp)
         if result is True:
             return MODE_PRICE, normal_temp
         if result is None:
@@ -1202,7 +1241,6 @@ class DHWCoordinator(DataUpdateCoordinator):
             return None
 
         boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
-        heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
         preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
         candidates: list[datetime] = []
@@ -1215,30 +1253,32 @@ class DHWCoordinator(DataUpdateCoordinator):
                 continue
 
             use_preheat = preheat_temp < required_temp and hours_until > 12.0
+            heat_up_preheat = self._heat_up_minutes(boiler_temp, preheat_temp)
+            heat_up_required = self._heat_up_minutes(boiler_temp, required_temp)
 
             # Phase 1: preheat if shower is far and preheat not yet reached
             if use_preheat and (boiler_temp is None or boiler_temp < preheat_temp - TEMP_HYSTERESIS):
-                slots = self._planned_slots_for_deadline(now, shower_dt, preheat_temp, heat_up_min, boiler_temp)
+                slots = self._planned_slots_for_deadline(now, shower_dt, preheat_temp, boiler_temp)
                 if slots:
                     future = [s for s in slots if s > now]
                     candidates.append(min(future) if future else now)
                 else:
-                    fallback = shower_dt - timedelta(minutes=heat_up_min + 10)
+                    fallback = shower_dt - timedelta(minutes=heat_up_preheat + 10)
                     if fallback > now:
                         candidates.append(fallback)
 
             # Phase 2: final push to required_temp within 12h window
             phase2_start = max(now, shower_dt - timedelta(hours=12))
-            if phase2_start < shower_dt - timedelta(minutes=heat_up_min):
+            if phase2_start < shower_dt - timedelta(minutes=heat_up_required):
                 slots2 = self._planned_slots_for_deadline(
-                    phase2_start, shower_dt, required_temp, heat_up_min, boiler_temp
+                    phase2_start, shower_dt, required_temp, boiler_temp
                 )
                 if slots2:
                     future2 = [s for s in slots2 if s > now]
                     if future2:
                         candidates.append(min(future2))
                 else:
-                    fallback = shower_dt - timedelta(minutes=heat_up_min + 10)
+                    fallback = shower_dt - timedelta(minutes=heat_up_required + 10)
                     if fallback > now:
                         candidates.append(fallback)
 
@@ -1253,7 +1293,6 @@ class DHWCoordinator(DataUpdateCoordinator):
             return []
 
         boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
-        heat_up_min = mean(self._heat_up_samples) if self._heat_up_samples else 60.0
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
         preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
         all_slots: set[str] = set()
@@ -1265,16 +1304,17 @@ class DHWCoordinator(DataUpdateCoordinator):
                 continue
 
             use_preheat = preheat_temp < required_temp and hours_until > 12.0
+            heat_up_required = self._heat_up_minutes(boiler_temp, required_temp)
 
             # Phase 1: preheat slots
             if use_preheat and (boiler_temp is None or boiler_temp < preheat_temp - TEMP_HYSTERESIS):
-                for slot in self._planned_slots_for_deadline(now, shower_dt, preheat_temp, heat_up_min, boiler_temp):
+                for slot in self._planned_slots_for_deadline(now, shower_dt, preheat_temp, boiler_temp):
                     all_slots.add(slot.isoformat())
 
             # Phase 2: final-push slots within 12h window
             phase2_start = max(now, shower_dt - timedelta(hours=12))
-            if phase2_start < shower_dt - timedelta(minutes=heat_up_min):
-                for slot in self._planned_slots_for_deadline(phase2_start, shower_dt, required_temp, heat_up_min, boiler_temp):
+            if phase2_start < shower_dt - timedelta(minutes=heat_up_required):
+                for slot in self._planned_slots_for_deadline(phase2_start, shower_dt, required_temp, boiler_temp):
                     all_slots.add(slot.isoformat())
 
         return sorted(all_slots)
@@ -1506,9 +1546,13 @@ class DHWCoordinator(DataUpdateCoordinator):
         ):
             self._session_notified = True
             duration_min = (now - self._session_start).total_seconds() / 60
-            self._heat_up_samples.append(duration_min)
-            if len(self._heat_up_samples) > HEAT_UP_SAMPLE_SIZE:
-                self._heat_up_samples.pop(0)
+            # A session that completes within a few minutes only means the tank was
+            # already at temperature. Averaging those in halves the apparent heat-up
+            # time and makes every deadline calculation start far too late.
+            if duration_min >= MIN_HEAT_UP_SAMPLE_MINUTES:
+                self._heat_up_samples.append(duration_min)
+                if len(self._heat_up_samples) > HEAT_UP_SAMPLE_SIZE:
+                    self._heat_up_samples.pop(0)
 
             # Track heating rate (°C/hour) for dynamic cheap-hours calculation
             start_temp = self._session_start_temp
@@ -1544,10 +1588,9 @@ class DHWCoordinator(DataUpdateCoordinator):
 
     async def _check_shower_readiness(self, now: datetime, boiler_temp: float | None) -> None:
         """Warn via push if water won't reach temperature before a scheduled shower."""
-        if boiler_temp is None or not self._heat_up_samples:
+        if boiler_temp is None:
             return
 
-        heat_up_min = mean(self._heat_up_samples)
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
 
@@ -1575,6 +1618,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             if key in self._shower_warning_sent:
                 continue
 
+            heat_up_min = self._heat_up_minutes(boiler_temp, float(required_temp))
             if boiler_temp < required_temp - TEMP_HYSTERESIS and minutes_until < heat_up_min:
                 self._shower_warning_sent.add(key)
                 await self._notify(
