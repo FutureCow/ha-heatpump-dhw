@@ -221,4 +221,13 @@ class DHWSensor(DHWEntity, SensorEntity):
             return None
         if self.entity_description.key == "next_heating":
             return {"planned_heating_slots": self.coordinator.data.get("planned_heating_slots", [])}
+        if self.entity_description.key == "learned_heat_rate":
+            data = self.coordinator.data
+            return {
+                "curve": data.get("heat_rate_curve", {}),
+                "samples_per_bucket": data.get("heat_rate_samples_per_bucket", {}),
+                "current_bucket": data.get("heat_rate_current_bucket"),
+                "rate_to_target": data.get("heat_rate_to_target"),
+                "session_average": data.get("heat_rate_session_average"),
+            }
         return None
