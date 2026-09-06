@@ -128,6 +128,12 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._last_set_temp: float | None = None
         self._prev_boiler_temp: float | None = None  # voor per-tick thermische accumulatie
 
+        # Storage load state. _store_loaded gates _save_state: a coordinator whose
+        # async_setup did not run to completion holds __init__ defaults, not the
+        # stored values, and must never be allowed to persist those over good data.
+        self._store_loaded: bool = False
+        self._store_existed: bool = False
+
         # Energy meter tracking
         self._energy_meter_prev: float | None = None
         self._month_start_meter: float | None = None
@@ -201,7 +207,9 @@ class DHWCoordinator(DataUpdateCoordinator):
     # ------------------------------------------------------------------
 
     async def async_setup(self) -> None:
-        stored = await self._store.async_load() or {}
+        raw_stored = await self._store.async_load()
+        self._store_existed = raw_stored is not None
+        stored = raw_stored or {}
         self._heat_up_samples = stored.get("heat_up_samples", [])
         self._cop_samples = stored.get("cop_samples", [])
         # loss_samples stores normalised k values (°C/h per °C ΔT) since storage_version 2.
@@ -256,10 +264,23 @@ class DHWCoordinator(DataUpdateCoordinator):
         self.legionella_mode_enabled = stored.get("legionella_mode_enabled", opts.get(OPT_LEGIONELLA_MODE_ENABLED, True))
         self.vacation_mode_enabled = stored.get("vacation_mode_enabled", False)
 
+        # Every field above parsed without raising — persisting is now safe.
+        self._store_loaded = True
+
     async def async_shutdown(self) -> None:
         await self._save_state()
 
     async def _save_state(self) -> None:
+        if not self._store_loaded:
+            # async_setup aborted part-way, so most attributes still hold their
+            # __init__ defaults. Writing them would replace months of accumulated
+            # totals and the learned heat-rate curve with empty values.
+            _LOGGER.warning(
+                "DHW: opslaan overgeslagen — laden van %s is niet voltooid, "
+                "wegschrijven zou opgeslagen tellers en curve wissen",
+                STORAGE_KEY,
+            )
+            return
         await self._store.async_save(
             {
                 "storage_version": 2,
@@ -424,14 +445,29 @@ class DHWCoordinator(DataUpdateCoordinator):
         """
         if meter_kwh is None:
             return
-        if self._month_start_meter is None:
-            self._month_start_meter = (
-                meter_kwh - self._monthly_kwh if self._monthly_kwh > 0 else meter_kwh
-            )
-        if self._year_start_meter is None:
-            self._year_start_meter = (
-                meter_kwh - self._yearly_kwh if self._yearly_kwh > 0 else meter_kwh
-            )
+        for label, start_attr, total_attr in (
+            ("maand", "_month_start_meter", "_monthly_kwh"),
+            ("jaar", "_year_start_meter", "_yearly_kwh"),
+        ):
+            if getattr(self, start_attr) is not None:
+                continue
+            total = getattr(self, total_attr)
+            if total > 0:
+                # Accumulated total known: derive the baseline so it is preserved.
+                setattr(self, start_attr, meter_kwh - total)
+                continue
+            # No baseline and no total. On a fresh install that is simply the
+            # starting point. On an existing install it means the stored value was
+            # lost, and adopting the current reading silently discards the running
+            # total — which is exactly how a whole year of kWh went missing once.
+            if self._store_existed:
+                _LOGGER.warning(
+                    "DHW: %sbasislijn ontbreekt terwijl er wel een opgeslagen status is; "
+                    "%stotaal begint opnieuw vanaf meterstand %.2f kWh. Zet "
+                    "%s terug in %s om het oude totaal te herstellen.",
+                    label, label, meter_kwh, start_attr.lstrip("_"), STORAGE_KEY,
+                )
+            setattr(self, start_attr, meter_kwh)
 
     def _sync_switch_state(self, now: datetime) -> None:
         """Sync self._heating with the actual hardware switch state.
