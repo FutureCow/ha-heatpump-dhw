@@ -143,7 +143,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # Persisted data (loaded from storage)
         self._heat_up_samples: list[float] = []
-        self._cop_samples: list[float] = []
+        self._cop_sessions: list[list[float]] = []  # [thermal_kwh, heating_kwh] per completed session
         self._loss_samples: list[float] = []  # °C/hour tank heat loss measurements
         self._heat_rate_samples: list[float] = []  # °C/hour heating rate measurements
         self._heat_rate_by_temp: dict[int, list[float]] = {}  # bucket floor °C -> rate samples
@@ -219,7 +219,10 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._store_existed = raw_stored is not None
         stored = raw_stored or {}
         self._heat_up_samples = stored.get("heat_up_samples", [])
-        self._cop_samples = stored.get("cop_samples", [])
+        # cop_sessions replaced cop_samples (bare ratios) in 1.2.88. The old ratios
+        # can't be energy-weighted and were ~20% high from the °C/kWh loss bug, so
+        # they are dropped rather than migrated.
+        self._cop_sessions = stored.get("cop_sessions", [])
         # loss_samples stores normalised k values (°C/h per °C ΔT) since storage_version 2.
         # Discard once on migration from the old raw °C/h format.
         if stored.get("storage_version", 1) >= 2:
@@ -297,7 +300,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             {
                 "storage_version": 2,
                 "heat_up_samples": self._heat_up_samples[-HEAT_UP_SAMPLE_SIZE:],
-                "cop_samples": self._cop_samples[-HEAT_UP_SAMPLE_SIZE:],
+                "cop_sessions": self._cop_sessions[-HEAT_UP_SAMPLE_SIZE:],
                 "loss_samples": self._loss_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "heat_rate_samples": self._heat_rate_samples[-HEAT_UP_SAMPLE_SIZE:],
                 "heat_rate_by_temp": {str(k): v for k, v in self._heat_rate_by_temp.items()},
@@ -586,7 +589,9 @@ class DHWCoordinator(DataUpdateCoordinator):
             ),
             "session_cost": self._last_session.get("cost", 0.0),
             "session_cop": self._last_session.get("cop"),
-            "avg_cop": mean(self._cop_samples) if self._cop_samples else None,
+            "avg_cop": self._period_cop(
+                sum(t for t, _ in self._cop_sessions), sum(e for _, e in self._cop_sessions)
+            ),
             "next_heating": self._next_heating.isoformat() if self._next_heating else None,
             "planned_heating_slots": self._planned_slots,
             "heat_up_duration_min": round(mean(self._heat_up_samples)) if self._heat_up_samples else None,
@@ -1715,9 +1720,9 @@ class DHWCoordinator(DataUpdateCoordinator):
             # Same reasoning as heat_up_samples: a few ticks of ΔT against a
             # 0.1 kWh meter step gives a meaningless ratio.
             if final_cop and duration_min >= MIN_HEAT_UP_SAMPLE_MINUTES:
-                self._cop_samples.append(final_cop)
-                if len(self._cop_samples) > HEAT_UP_SAMPLE_SIZE:
-                    self._cop_samples.pop(0)
+                self._cop_sessions.append([sess["thermal_kwh"], sess["running_kwh"]])
+                if len(self._cop_sessions) > HEAT_UP_SAMPLE_SIZE:
+                    self._cop_sessions.pop(0)
 
             cop_str = f", COP {final_cop:.1f}" if final_cop else ""
             outside_str = f" (buiten {outside_temp:.0f}°C)" if outside_temp is not None else ""
