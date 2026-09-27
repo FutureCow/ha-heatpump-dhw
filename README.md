@@ -106,6 +106,7 @@ Als er geen voorspelling beschikbaar is, valt de prijsmodus terug op de gewone d
 |--------|------|-----------------|-----------|
 | Weersverwachting | `weather` entiteit | HA standaard weather | `weather.thuis` |
 | Buitentemperatuur | `°C` | Decimaal getal | `12.5` |
+| Temperatuur opstellingsruimte | `°C` | Decimaal getal; voor het warmteverlies van de tank. Aan te raden als de boiler op zolder of in een schuur staat. Ook achteraf in te stellen via Opties | `21.0` |
 | Aanwezigheid | `binary_sensor`, `person`, `device_tracker` of `input_boolean` | `on` / `home` = thuis | `binary_sensor.iemand_thuis` |
 
 > **Aanwezigheid:** De integratie beschouwt de volgende states als "thuis": `on`, `home`, `true`. Alles anders (bijv. `off`, `not_home`) activeert de vakantie modus als die ingeschakeld staat.
