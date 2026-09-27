@@ -167,6 +167,22 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         icon="mdi:chart-line",
     ),
     DHWSensorDescription(
+        key="monthly_cop",
+        data_key="monthly_cop",
+        name="Maandelijkse COP",
+        native_unit_of_measurement=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:calendar-month",
+    ),
+    DHWSensorDescription(
+        key="yearly_cop",
+        data_key="yearly_cop",
+        name="Jaarlijkse COP",
+        native_unit_of_measurement=None,
+        state_class=SensorStateClass.MEASUREMENT,
+        icon="mdi:calendar",
+    ),
+    DHWSensorDescription(
         key="learned_loss_rate",
         data_key="learned_loss_rate",
         name="Gemeten warmteverlies tank",
@@ -221,6 +237,12 @@ class DHWSensor(DHWEntity, SensorEntity):
             return None
         if self.entity_description.key == "next_heating":
             return {"planned_heating_slots": self.coordinator.data.get("planned_heating_slots", [])}
+        if self.entity_description.key in ("monthly_cop", "yearly_cop"):
+            period = self.entity_description.key.removesuffix("_cop")
+            return {
+                "thermal_kwh": self.coordinator.data.get(f"{period}_thermal_kwh"),
+                "heating_kwh": self.coordinator.data.get(f"{period}_heating_kwh"),
+            }
         if self.entity_description.key == "learned_heat_rate":
             data = self.coordinator.data
             return {
