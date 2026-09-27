@@ -1604,15 +1604,15 @@ class DHWCoordinator(DataUpdateCoordinator):
         # Per-tick ΔT avoids needing a stable start_temp and naturally handles
         # multi-phase sessions (preheat → final push). Heat loss correction ensures
         # energy delivered but lost to ambient is counted, giving a realistic COP.
+        # Both terms are temperature changes (°C) and must go through the tank's
+        # heat capacity to become kWh — adding the loss in °C once inflated the
+        # COP by ~20%.
         tank_vol = self._opt(OPT_TANK_VOLUME_L, DEFAULT_TANK_VOLUME_L)
         if boiler_temp is not None and self._prev_boiler_temp is not None:
-            delta_t = boiler_temp - self._prev_boiler_temp
-            delta_stored = tank_vol * WATER_SPECIFIC_HEAT_KJ * delta_t / 3600
-            if self._loss_samples and outside_temp is not None:
-                k = mean(self._loss_samples)
-                delta_lost = k * (self._prev_boiler_temp - outside_temp) * (UPDATE_INTERVAL / 3600)
-            else:
-                delta_lost = 0.0
+            kwh_per_degree = tank_vol * WATER_SPECIFIC_HEAT_KJ / 3600
+            delta_stored = kwh_per_degree * (boiler_temp - self._prev_boiler_temp)
+            loss_degrees = self._loss_rate_at(self._prev_boiler_temp, outside_temp) * (UPDATE_INTERVAL / 3600)
+            delta_lost = kwh_per_degree * loss_degrees
             sess["thermal_kwh"] = max(0.0, sess.get("thermal_kwh", 0.0) + delta_stored + delta_lost)
         self._prev_boiler_temp = boiler_temp
 
@@ -1655,7 +1655,9 @@ class DHWCoordinator(DataUpdateCoordinator):
                         self._heat_rate_samples.pop(0)
 
             final_cop = sess.get("cop")
-            if final_cop:
+            # Same reasoning as heat_up_samples: a few ticks of ΔT against a
+            # 0.1 kWh meter step gives a meaningless ratio.
+            if final_cop and duration_min >= MIN_HEAT_UP_SAMPLE_MINUTES:
                 self._cop_samples.append(final_cop)
                 if len(self._cop_samples) > HEAT_UP_SAMPLE_SIZE:
                     self._cop_samples.pop(0)
