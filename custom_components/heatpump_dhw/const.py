@@ -133,4 +133,7 @@ DEADLINE_BUFFER_MINUTES = 15.0  # margin between the end of a planned heating
 # reserved (see _needed_cheap_hours) already accounts for how long heating takes.
 MIN_HEAT_UP_SAMPLE_MINUTES = 15.0  # ignore "sessions" shorter than this in heat_up_samples;
 # they complete instantly because the tank was already at temperature.
+# Month/year COP is withheld below this much heating energy: early in a period a
+# single 0.1 kWh meter step moves the ratio by 20% or more.
+MIN_PERIOD_COP_KWH = 0.5
 DEFAULT_HEAT_RATE = 5.0  # °C/h fallback when no curve data is learned yet

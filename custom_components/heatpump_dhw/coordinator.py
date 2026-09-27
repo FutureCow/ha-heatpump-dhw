@@ -64,6 +64,7 @@ from .const import (
     LEGIONELLA_MAX_RUN_MINUTES,
     MIN_CYCLE_MINUTES,
     MIN_HEAT_UP_SAMPLE_MINUTES,
+    MIN_PERIOD_COP_KWH,
     MODE_ANTI_BLOCK,
     MODE_BOOST,
     MODE_IDLE,
@@ -159,6 +160,12 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._yearly_kwh: float = 0.0
         self._yearly_cost: float = 0.0
         self._yearly_year: int = datetime.now().year
+        # Period COP: thermal energy into the water vs. electricity while heating.
+        # Standby draw is left out on purpose, same as the session COP.
+        self._monthly_thermal_kwh: float = 0.0
+        self._monthly_heating_kwh: float = 0.0
+        self._yearly_thermal_kwh: float = 0.0
+        self._yearly_heating_kwh: float = 0.0
 
         # For auto-learning heat loss rate
         self._last_idle_temp: float | None = None
@@ -253,6 +260,10 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._yearly_kwh = stored.get("yearly_kwh", 0.0)
         self._yearly_cost = stored.get("yearly_cost", 0.0)
         self._yearly_year = stored.get("yearly_year", datetime.now().year)
+        self._monthly_thermal_kwh = stored.get("monthly_thermal_kwh", 0.0)
+        self._monthly_heating_kwh = stored.get("monthly_heating_kwh", 0.0)
+        self._yearly_thermal_kwh = stored.get("yearly_thermal_kwh", 0.0)
+        self._yearly_heating_kwh = stored.get("yearly_heating_kwh", 0.0)
         self._month_start_meter = stored.get("month_start_meter")
         self._year_start_meter = stored.get("year_start_meter")
         self._last_session = stored.get("last_session", {})
@@ -307,6 +318,10 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "yearly_kwh": self._yearly_kwh,
                 "yearly_cost": self._yearly_cost,
                 "yearly_year": self._yearly_year,
+                "monthly_thermal_kwh": self._monthly_thermal_kwh,
+                "monthly_heating_kwh": self._monthly_heating_kwh,
+                "yearly_thermal_kwh": self._yearly_thermal_kwh,
+                "yearly_heating_kwh": self._yearly_heating_kwh,
                 "month_start_meter": self._month_start_meter,
                 "year_start_meter": self._year_start_meter,
                 "last_session": self._last_session,
@@ -514,6 +529,8 @@ class DHWCoordinator(DataUpdateCoordinator):
             )
             self._monthly_kwh = 0.0
             self._monthly_cost = 0.0
+            self._monthly_thermal_kwh = 0.0
+            self._monthly_heating_kwh = 0.0
             self._monthly_month = now.month
             self._month_start_meter = meter_kwh
         if now.year != self._yearly_year:
@@ -523,6 +540,8 @@ class DHWCoordinator(DataUpdateCoordinator):
             )
             self._yearly_kwh = 0.0
             self._yearly_cost = 0.0
+            self._yearly_thermal_kwh = 0.0
+            self._yearly_heating_kwh = 0.0
             self._yearly_year = now.year
             self._year_start_meter = meter_kwh
 
@@ -531,6 +550,13 @@ class DHWCoordinator(DataUpdateCoordinator):
                 self._monthly_kwh = max(0.0, meter_kwh - self._month_start_meter)
             if self._year_start_meter is not None:
                 self._yearly_kwh = max(0.0, meter_kwh - self._year_start_meter)
+
+    @staticmethod
+    def _period_cop(thermal_kwh: float, heating_kwh: float) -> float | None:
+        """Energy-weighted COP over a period: a long heat-up counts for more than a top-up."""
+        if heating_kwh < MIN_PERIOD_COP_KWH:
+            return None
+        return round(max(0.0, thermal_kwh) / heating_kwh, 2)
 
     def _build_data_dict(
         self,
@@ -576,6 +602,12 @@ class DHWCoordinator(DataUpdateCoordinator):
                 else round(self._yearly_kwh, 3)
             ),
             "yearly_cost": round(self._yearly_cost, 2),
+            "monthly_cop": self._period_cop(self._monthly_thermal_kwh, self._monthly_heating_kwh),
+            "monthly_thermal_kwh": round(self._monthly_thermal_kwh, 2),
+            "monthly_heating_kwh": round(self._monthly_heating_kwh, 2),
+            "yearly_cop": self._period_cop(self._yearly_thermal_kwh, self._yearly_heating_kwh),
+            "yearly_thermal_kwh": round(self._yearly_thermal_kwh, 2),
+            "yearly_heating_kwh": round(self._yearly_heating_kwh, 2),
             "learned_loss_rate": round(self._loss_rate_at(
                 float(self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)), self._ambient_temp(outside_temp)
             ), 2) if self._loss_samples else None,
@@ -1609,6 +1641,8 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._monthly_cost += cost_delta
         self._yearly_kwh += kwh_delta
         self._yearly_cost += cost_delta
+        self._monthly_heating_kwh += kwh_delta
+        self._yearly_heating_kwh += kwh_delta
 
         sess = self._last_session
         sess["running_kwh"] = sess.get("running_kwh", 0.0) + kwh_delta
@@ -1630,7 +1664,14 @@ class DHWCoordinator(DataUpdateCoordinator):
             loss_degrees = self._loss_rate_at(self._prev_boiler_temp, ambient_temp) * (UPDATE_INTERVAL / 3600)
             delta_lost = kwh_per_degree * loss_degrees
             sess["thermal_kwh"] = max(0.0, sess.get("thermal_kwh", 0.0) + delta_stored + delta_lost)
-        self._prev_boiler_temp = boiler_temp
+            # Unclamped: a session often starts with a small dip (cold water
+            # stirred up past the sensor) that the rest of the session recovers.
+            self._monthly_thermal_kwh += delta_stored + delta_lost
+            self._yearly_thermal_kwh += delta_stored + delta_lost
+        # Keep the last valid reading across a sensor dropout, so the rise during
+        # the gap is still counted instead of the energy being booked without it.
+        if boiler_temp is not None:
+            self._prev_boiler_temp = boiler_temp
 
         if sess.get("running_kwh", 0.0) > 0 and sess.get("thermal_kwh", 0.0) > 0:
             sess["cop"] = round(sess["thermal_kwh"] / sess["running_kwh"], 2)
