@@ -21,6 +21,7 @@ CONF_PRICE_FORECAST_SENSOR = "price_forecast_sensor"
 # Config keys — optional sensors
 CONF_WEATHER_ENTITY = "weather_entity"
 CONF_OUTSIDE_TEMP_SENSOR = "outside_temp_sensor"
+CONF_AMBIENT_TEMP_SENSOR = "ambient_temp_sensor"  # room the tank stands in
 CONF_PRESENCE_SENSOR = "presence_sensor"
 CONF_NOTIFY_SERVICE = "notify_service"
 

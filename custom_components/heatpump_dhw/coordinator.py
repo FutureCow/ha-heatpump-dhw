@@ -5,7 +5,7 @@ import json
 import logging
 import math
 from datetime import datetime, timedelta, time as dt_time
-from statistics import mean
+from statistics import mean, median
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -25,6 +25,7 @@ from .const import (
     CONF_EHEATER_SWITCH,
     CONF_HEATPUMP_SWITCH,
     CONF_NOTIFY_SERVICE,
+    CONF_AMBIENT_TEMP_SENSOR,
     CONF_OUTSIDE_TEMP_SENSOR,
     CONF_POWER_SENSOR,
     CONF_PRESENCE_SENSOR,
@@ -399,6 +400,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         boiler_temp, power_w, meter_kwh, surplus_w, price_eur, outside_temp, present = (
             self._read_sensors()
         )
+        ambient_temp = self._ambient_temp(outside_temp)
         self._init_meter_baselines(meter_kwh)
         self._sync_switch_state(now)
 
@@ -406,11 +408,13 @@ class DHWCoordinator(DataUpdateCoordinator):
             now, boiler_temp, surplus_w, price_eur, present
         )
 
-        await self._track_session(boiler_temp, power_w, price_eur, outside_temp, meter_kwh, now, desired_temp)
+        await self._track_session(
+            boiler_temp, power_w, price_eur, outside_temp, ambient_temp, meter_kwh, now, desired_temp
+        )
         await self._apply_control(desired_mode, desired_temp, boiler_temp, power_w, meter_kwh, now)
 
         self._energy_meter_prev = meter_kwh
-        self._learn_heat_loss(boiler_temp, now, outside_temp)
+        self._learn_heat_loss(boiler_temp, now, ambient_temp)
         self._learn_heat_rate_curve(boiler_temp, now)
         await self._check_shower_readiness(now, boiler_temp)
 
@@ -436,6 +440,15 @@ class DHWCoordinator(DataUpdateCoordinator):
             self._state_float(self.cfg.get(CONF_OUTSIDE_TEMP_SENSOR)),
             self._state_bool(self.cfg.get(CONF_PRESENCE_SENSOR)),
         )
+
+    def _ambient_temp(self, outside_temp: float | None) -> float | None:
+        """Air temperature around the tank, which is what drives its heat loss.
+
+        A tank in an attic or garage sits well above outside temperature and does
+        not follow it (warm attic on a cold night), so a room sensor is preferred.
+        """
+        room = self._state_float(self.cfg.get(CONF_AMBIENT_TEMP_SENSOR))
+        return room if room is not None else outside_temp
 
     def _init_meter_baselines(self, meter_kwh: float | None) -> None:
         """Set month/year meter baselines on first reading.
@@ -564,7 +577,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             ),
             "yearly_cost": round(self._yearly_cost, 2),
             "learned_loss_rate": round(self._loss_rate_at(
-                float(self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)), outside_temp
+                float(self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)), self._ambient_temp(outside_temp)
             ), 2) if self._loss_samples else None,
             "learned_heat_rate": self._current_heat_rate(boiler_temp),
             "heat_rate_curve": curve_rates,
@@ -581,7 +594,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             ),
         }
 
-    def _learn_heat_loss(self, boiler_temp: float | None, now: datetime, outside_temp: float | None) -> None:
+    def _learn_heat_loss(self, boiler_temp: float | None, now: datetime, ambient_temp: float | None) -> None:
         """Measure normalised heat loss coefficient k (°C/h per °C ΔT above ambient).
 
         Storing k instead of a raw °C/h rate corrects for the temperature dependency
@@ -609,7 +622,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             if drop > 0:
                 rate = drop / elapsed_hours  # °C/h at current temperatures
                 avg_temp = (self._last_idle_temp + boiler_temp) / 2
-                ambient = outside_temp if outside_temp is not None else DEFAULT_AMBIENT_TEMP
+                ambient = ambient_temp if ambient_temp is not None else DEFAULT_AMBIENT_TEMP
                 delta_t = avg_temp - ambient
                 if delta_t > 5.0:  # only normalise when ΔT is meaningful
                     k = rate / delta_t  # °C/h per °C ΔT
@@ -748,11 +761,13 @@ class DHWCoordinator(DataUpdateCoordinator):
             counts[key] = len(samples)
         return curve, counts
 
-    def _loss_rate_at(self, temp: float, outside_temp: float | None) -> float:
+    def _loss_rate_at(self, temp: float, ambient_temp: float | None) -> float:
         """Return heat loss rate (°C/h) at given water temperature."""
-        ambient = outside_temp if outside_temp is not None else DEFAULT_AMBIENT_TEMP
+        ambient = ambient_temp if ambient_temp is not None else DEFAULT_AMBIENT_TEMP
         if self._loss_samples:
-            k = mean(self._loss_samples)
+            # Median, not mean: an idle window with a shower in it reads as a
+            # 3-4× loss rate and would drag the mean up for the next 10 windows.
+            k = median(self._loss_samples)
         else:
             # Default k derived from configured flat rate at 55°C reference
             default_rate = float(self._opt(OPT_TANK_LOSS_RATE, DEFAULT_TANK_LOSS_RATE))
@@ -1572,6 +1587,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         power_w: float | None,
         price_eur: float | None,
         outside_temp: float | None,
+        ambient_temp: float | None,
         meter_kwh: float | None,
         now: datetime,
         desired_temp: float = 0.0,
@@ -1611,7 +1627,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         if boiler_temp is not None and self._prev_boiler_temp is not None:
             kwh_per_degree = tank_vol * WATER_SPECIFIC_HEAT_KJ / 3600
             delta_stored = kwh_per_degree * (boiler_temp - self._prev_boiler_temp)
-            loss_degrees = self._loss_rate_at(self._prev_boiler_temp, outside_temp) * (UPDATE_INTERVAL / 3600)
+            loss_degrees = self._loss_rate_at(self._prev_boiler_temp, ambient_temp) * (UPDATE_INTERVAL / 3600)
             delta_lost = kwh_per_degree * loss_degrees
             sess["thermal_kwh"] = max(0.0, sess.get("thermal_kwh", 0.0) + delta_stored + delta_lost)
         self._prev_boiler_temp = boiler_temp

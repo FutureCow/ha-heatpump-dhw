@@ -20,6 +20,7 @@ from homeassistant.helpers.selector import (
 )
 
 from .const import (
+    CONF_AMBIENT_TEMP_SENSOR,
     CONF_BOILER_TEMP_SENSOR,
     CONF_DYNAMIC_PRICE_SENSOR,
     CONF_ENERGY_METER_SENSOR,
@@ -146,6 +147,7 @@ class DHWConfigFlow(ConfigFlow, domain=DOMAIN):
                     EntitySelectorConfig(domain="weather")
                 ),
                 vol.Optional(CONF_OUTSIDE_TEMP_SENSOR): EntitySelector(_SENSOR),
+                vol.Optional(CONF_AMBIENT_TEMP_SENSOR): EntitySelector(_SENSOR),
                 vol.Optional(CONF_PRESENCE_SENSOR): EntitySelector(
                     EntitySelectorConfig(
                         domain=["binary_sensor", "person", "device_tracker", "input_boolean"]
@@ -220,6 +222,10 @@ class DHWOptionsFlow(OptionsFlow):
             vol.Optional(
                 CONF_ENERGY_METER_SENSOR,
                 description={"suggested_value": current.get(CONF_ENERGY_METER_SENSOR, "")},
+            ): EntitySelector(_SENSOR),
+            vol.Optional(
+                CONF_AMBIENT_TEMP_SENSOR,
+                description={"suggested_value": current.get(CONF_AMBIENT_TEMP_SENSOR, "")},
             ): EntitySelector(_SENSOR),
         }
         schema = vol.Schema({**sensor_fields, **_defaults_fields(current)})
