@@ -1636,7 +1636,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         Only rises above the last counted temperature are heat from the pump. A
         fall is never negative heat: either a start-up dip of a few tenths, which
         the session recovers and which is therefore not counted on the way back
-        up either, or hot water being drawn off. Booking a draw-off as negative
+        up either, or hot water being drawn off (_draw_off stays set until the
+        temperature rises again, and _track_session leaves those ticks out of the
+        COP). Booking a draw-off as negative
         heat once took 2.9 kWh off the period totals in a single session (49 →
         36.5 °C while heating), so on a draw-off the reference follows the
         temperature down and reheating from there counts in full.
@@ -1702,15 +1704,27 @@ class DHWCoordinator(DataUpdateCoordinator):
         # A missing reading is skipped; the reference survives, so the rise during
         # a sensor dropout is still counted once the sensor is back.
         if boiler_temp is not None:
-            kwh_per_degree = tank_vol * WATER_SPECIFIC_HEAT_KJ / 3600
-            loss_degrees = self._loss_rate_at(boiler_temp, ambient_temp) * (UPDATE_INTERVAL / 3600)
-            delta_thermal = kwh_per_degree * (self._counted_rise(boiler_temp) + loss_degrees)
-            sess["thermal_kwh"] = sess.get("thermal_kwh", 0.0) + delta_thermal
-            self._monthly_thermal_kwh += delta_thermal
-            self._yearly_thermal_kwh += delta_thermal
+            rise = self._counted_rise(boiler_temp)
+            if self._draw_off:
+                # Heat delivered while water is drawn off leaves with that water
+                # and cannot be measured with one sensor, so these minutes are
+                # kept out of the COP on both sides. The meter only moves in
+                # 0.1 kWh steps, so the share is taken from the power reading.
+                excluded = (power_w or 0) * UPDATE_INTERVAL / 3_600_000
+                sess["cop_excluded_kwh"] = sess.get("cop_excluded_kwh", 0.0) + excluded
+                self._monthly_heating_kwh -= excluded
+                self._yearly_heating_kwh -= excluded
+            else:
+                kwh_per_degree = tank_vol * WATER_SPECIFIC_HEAT_KJ / 3600
+                loss_degrees = self._loss_rate_at(boiler_temp, ambient_temp) * (UPDATE_INTERVAL / 3600)
+                delta_thermal = kwh_per_degree * (rise + loss_degrees)
+                sess["thermal_kwh"] = sess.get("thermal_kwh", 0.0) + delta_thermal
+                self._monthly_thermal_kwh += delta_thermal
+                self._yearly_thermal_kwh += delta_thermal
 
-        if sess.get("running_kwh", 0.0) > 0 and sess.get("thermal_kwh", 0.0) > 0:
-            sess["cop"] = round(sess["thermal_kwh"] / sess["running_kwh"], 2)
+        cop_kwh = sess.get("running_kwh", 0.0) - sess.get("cop_excluded_kwh", 0.0)
+        if cop_kwh > 0 and sess.get("thermal_kwh", 0.0) > 0:
+            sess["cop"] = round(sess["thermal_kwh"] / cop_kwh, 2)
 
         # Session complete when boiler reaches the target set at session start.
         # Using _session_target_temp (stored at pump-on) avoids the pitfall where
@@ -1751,7 +1765,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             # Same reasoning as heat_up_samples: a few ticks of ΔT against a
             # 0.1 kWh meter step gives a meaningless ratio.
             if final_cop and duration_min >= MIN_HEAT_UP_SAMPLE_MINUTES:
-                self._cop_sessions.append([sess["thermal_kwh"], sess["running_kwh"]])
+                self._cop_sessions.append([sess["thermal_kwh"], cop_kwh])
                 if len(self._cop_sessions) > HEAT_UP_SAMPLE_SIZE:
                     self._cop_sessions.pop(0)
 
