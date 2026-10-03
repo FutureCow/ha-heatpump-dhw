@@ -64,6 +64,7 @@ from .const import (
     LEGIONELLA_MAX_RUN_MINUTES,
     MIN_CYCLE_MINUTES,
     MIN_HEAT_UP_SAMPLE_MINUTES,
+    DRAW_OFF_DROP_C,
     MIN_PERIOD_COP_KWH,
     MODE_ANTI_BLOCK,
     MODE_BOOST,
@@ -128,7 +129,10 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._session_notified: bool = False
         self._session_target_temp: float | None = None
         self._last_set_temp: float | None = None
-        self._prev_boiler_temp: float | None = None  # voor per-tick thermische accumulatie
+        # Highest temperature already counted as stored heat this session; see
+        # _counted_rise. _draw_off is set while the tank is being emptied.
+        self._thermal_ref_temp: float | None = None
+        self._draw_off: bool = False
 
         # Storage load state. _store_loaded gates _save_state: a coordinator whose
         # async_setup did not run to completion holds __init__ defaults, not the
@@ -267,6 +271,12 @@ class DHWCoordinator(DataUpdateCoordinator):
         self._monthly_heating_kwh = stored.get("monthly_heating_kwh", 0.0)
         self._yearly_thermal_kwh = stored.get("yearly_thermal_kwh", 0.0)
         self._yearly_heating_kwh = stored.get("yearly_heating_kwh", 0.0)
+        # 1.2.87/1.2.88 booked hot-water draw-offs during a session as negative
+        # heat. The month counter is the only span known to be free of one, so the
+        # year restarts from it once instead of carrying the error to December.
+        if not stored.get("period_cop_draw_off_fix", False):
+            self._yearly_thermal_kwh = self._monthly_thermal_kwh
+            self._yearly_heating_kwh = self._monthly_heating_kwh
         self._month_start_meter = stored.get("month_start_meter")
         self._year_start_meter = stored.get("year_start_meter")
         self._last_session = stored.get("last_session", {})
@@ -325,6 +335,7 @@ class DHWCoordinator(DataUpdateCoordinator):
                 "monthly_heating_kwh": self._monthly_heating_kwh,
                 "yearly_thermal_kwh": self._yearly_thermal_kwh,
                 "yearly_heating_kwh": self._yearly_heating_kwh,
+                "period_cop_draw_off_fix": True,
                 "month_start_meter": self._month_start_meter,
                 "year_start_meter": self._year_start_meter,
                 "last_session": self._last_session,
@@ -1502,13 +1513,14 @@ class DHWCoordinator(DataUpdateCoordinator):
                 self._last_session = {"running_kwh": 0.0, "running_cost": 0.0, "thermal_kwh": 0.0}
                 self._session_notified = False
                 self._session_target_temp = desired_temp
-                self._prev_boiler_temp = boiler_temp
+                self._thermal_ref_temp = boiler_temp
+                self._draw_off = False
                 log = _LOGGER.debug if mode == MODE_ANTI_BLOCK else _LOGGER.info
                 log("DHW: start heating mode=%s target=%.1f°C", mode, desired_temp)
                 await self._notify(f"Boiler verwarming gestart ({mode}), doel: {desired_temp:.0f}°C")
             else:
                 await self._turn_off_heatpump()
-                self._prev_boiler_temp = None
+                self._thermal_ref_temp = None
                 log = _LOGGER.debug if prev_mode == MODE_ANTI_BLOCK else _LOGGER.info
                 log("DHW: stop heating previous_mode=%s", prev_mode)
                 self._last_session["running_kwh"] = 0.0
@@ -1618,6 +1630,30 @@ class DHWCoordinator(DataUpdateCoordinator):
     # Session tracking + COP calculation
     # ------------------------------------------------------------------
 
+    def _counted_rise(self, boiler_temp: float) -> float:
+        """Return the temperature rise (°C) to book as heat stored this tick.
+
+        Only rises above the last counted temperature are heat from the pump. A
+        fall is never negative heat: either a start-up dip of a few tenths, which
+        the session recovers and which is therefore not counted on the way back
+        up either, or hot water being drawn off. Booking a draw-off as negative
+        heat once took 2.9 kWh off the period totals in a single session (49 →
+        36.5 °C while heating), so on a draw-off the reference follows the
+        temperature down and reheating from there counts in full.
+        """
+        ref = self._thermal_ref_temp
+        if ref is None:
+            self._thermal_ref_temp = boiler_temp
+            return 0.0
+        if boiler_temp > ref:
+            self._draw_off = False
+            self._thermal_ref_temp = boiler_temp
+            return boiler_temp - ref
+        if self._draw_off or ref - boiler_temp > DRAW_OFF_DROP_C:
+            self._draw_off = True
+            self._thermal_ref_temp = boiler_temp
+        return 0.0
+
     async def _track_session(
         self,
         boiler_temp: float | None,
@@ -1663,20 +1699,15 @@ class DHWCoordinator(DataUpdateCoordinator):
         # heat capacity to become kWh — adding the loss in °C once inflated the
         # COP by ~20%.
         tank_vol = self._opt(OPT_TANK_VOLUME_L, DEFAULT_TANK_VOLUME_L)
-        if boiler_temp is not None and self._prev_boiler_temp is not None:
-            kwh_per_degree = tank_vol * WATER_SPECIFIC_HEAT_KJ / 3600
-            delta_stored = kwh_per_degree * (boiler_temp - self._prev_boiler_temp)
-            loss_degrees = self._loss_rate_at(self._prev_boiler_temp, ambient_temp) * (UPDATE_INTERVAL / 3600)
-            delta_lost = kwh_per_degree * loss_degrees
-            sess["thermal_kwh"] = max(0.0, sess.get("thermal_kwh", 0.0) + delta_stored + delta_lost)
-            # Unclamped: a session often starts with a small dip (cold water
-            # stirred up past the sensor) that the rest of the session recovers.
-            self._monthly_thermal_kwh += delta_stored + delta_lost
-            self._yearly_thermal_kwh += delta_stored + delta_lost
-        # Keep the last valid reading across a sensor dropout, so the rise during
-        # the gap is still counted instead of the energy being booked without it.
+        # A missing reading is skipped; the reference survives, so the rise during
+        # a sensor dropout is still counted once the sensor is back.
         if boiler_temp is not None:
-            self._prev_boiler_temp = boiler_temp
+            kwh_per_degree = tank_vol * WATER_SPECIFIC_HEAT_KJ / 3600
+            loss_degrees = self._loss_rate_at(boiler_temp, ambient_temp) * (UPDATE_INTERVAL / 3600)
+            delta_thermal = kwh_per_degree * (self._counted_rise(boiler_temp) + loss_degrees)
+            sess["thermal_kwh"] = sess.get("thermal_kwh", 0.0) + delta_thermal
+            self._monthly_thermal_kwh += delta_thermal
+            self._yearly_thermal_kwh += delta_thermal
 
         if sess.get("running_kwh", 0.0) > 0 and sess.get("thermal_kwh", 0.0) > 0:
             sess["cop"] = round(sess["thermal_kwh"] / sess["running_kwh"], 2)
