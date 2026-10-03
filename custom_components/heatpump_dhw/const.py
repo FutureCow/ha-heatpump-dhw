@@ -136,4 +136,7 @@ MIN_HEAT_UP_SAMPLE_MINUTES = 15.0  # ignore "sessions" shorter than this in heat
 # Month/year COP is withheld below this much heating energy: early in a period a
 # single 0.1 kWh meter step moves the ratio by 20% or more.
 MIN_PERIOD_COP_KWH = 0.5
+# A fall this far below the last counted temperature while heating is hot water
+# being drawn off, not the start-up dip of a few tenths that a session recovers.
+DRAW_OFF_DROP_C = 1.0
 DEFAULT_HEAT_RATE = 5.0  # °C/h fallback when no curve data is learned yet
