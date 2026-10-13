@@ -62,6 +62,7 @@ from .const import (
     HEAT_RATE_SAMPLE_MIN_RATE,
     HEAT_UP_SAMPLE_SIZE,
     LEGIONELLA_MAX_RUN_MINUTES,
+    MAX_METER_POWER_W,
     MIN_CYCLE_MINUTES,
     MIN_HEAT_UP_SAMPLE_MINUTES,
     DRAW_OFF_DROP_C,
@@ -1671,7 +1672,23 @@ class DHWCoordinator(DataUpdateCoordinator):
             return
 
         if meter_kwh is not None and self._energy_meter_prev is not None:
-            kwh_delta = max(0.0, meter_kwh - self._energy_meter_prev)
+            kwh_delta = meter_kwh - self._energy_meter_prev
+            max_delta = MAX_METER_POWER_W * UPDATE_INTERVAL / 3_600_000
+            if not 0.0 <= kwh_delta <= max_delta:
+                # The meter reset. A Zigbee plug reports 0 kWh while it boots,
+                # so every power cut yields one tick of -194 kWh followed by one
+                # of +194 kWh. The kWh counters survive that because they are
+                # derived from the period baselines, but the cost accumulators
+                # are not: eighteen trips of the earth-leakage breaker in
+                # October 2026 booked EUR 85.84 of electricity never used.
+                # Nothing was consumed while the meter was down, so book nothing
+                # and let the next tick re-anchor on the new reading.
+                _LOGGER.warning(
+                    "DHW: energiemeter sprong van %.2f naar %.2f kWh — tick niet "
+                    "geboekt (meterreset of stroomonderbreking)",
+                    self._energy_meter_prev, meter_kwh,
+                )
+                kwh_delta = 0.0
         else:
             kwh_delta = (power_w or 0) * UPDATE_INTERVAL / 3_600_000
         cost_delta = kwh_delta * (price_eur or 0)
