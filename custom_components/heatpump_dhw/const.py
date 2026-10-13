@@ -99,6 +99,11 @@ TEMP_HYSTERESIS = 1.0  # °C below target before we consider heating done
 # Update interval in seconds
 UPDATE_INTERVAL = 60
 
+# Largest power the appliance can plausibly draw. Used to recognise a meter
+# reset: anything above this in one tick is not consumption but the energy
+# meter restarting at 0 (element 2 kW + compressor 0.5 kW, so 6 kW is ample).
+MAX_METER_POWER_W = 6000
+
 # Minimum minutes between switching the heatpump on/off to avoid short cycling
 MIN_CYCLE_MINUTES = 5
 
