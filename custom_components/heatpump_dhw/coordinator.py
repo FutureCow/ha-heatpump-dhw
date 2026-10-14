@@ -62,7 +62,7 @@ from .const import (
     HEAT_RATE_SAMPLE_MIN_RATE,
     HEAT_UP_SAMPLE_SIZE,
     LEGIONELLA_MAX_RUN_MINUTES,
-    MAX_METER_POWER_W,
+    MAX_METER_DELTA_KWH,
     MIN_CYCLE_MINUTES,
     MIN_HEAT_UP_SAMPLE_MINUTES,
     DRAW_OFF_DROP_C,
@@ -1673,8 +1673,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         if meter_kwh is not None and self._energy_meter_prev is not None:
             kwh_delta = meter_kwh - self._energy_meter_prev
-            max_delta = MAX_METER_POWER_W * UPDATE_INTERVAL / 3_600_000
-            if not 0.0 <= kwh_delta <= max_delta:
+            if not 0.0 <= kwh_delta <= MAX_METER_DELTA_KWH:
                 # The meter reset. A Zigbee plug reports 0 kWh while it boots,
                 # so every power cut yields one tick of -194 kWh followed by one
                 # of +194 kWh. The kWh counters survive that because they are

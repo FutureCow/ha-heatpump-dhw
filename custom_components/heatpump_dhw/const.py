@@ -99,10 +99,13 @@ TEMP_HYSTERESIS = 1.0  # °C below target before we consider heating done
 # Update interval in seconds
 UPDATE_INTERVAL = 60
 
-# Largest power the appliance can plausibly draw. Used to recognise a meter
-# reset: anything above this in one tick is not consumption but the energy
-# meter restarting at 0 (element 2 kW + compressor 0.5 kW, so 6 kW is ample).
-MAX_METER_POWER_W = 6000
+# Largest meter increase that can be real in one cycle. Above this the meter did
+# not count but restarted: a Zigbee plug reports 0 kWh while it boots.
+# Deliberately generous rather than derived from the appliance's 2,5 kW, because
+# such a plug reports in steps of about 0,1 kWh and a missed poll stacks several
+# of those — a 0,1 kWh ceiling rejected real consumption. A reset lands two
+# orders of magnitude higher (194 kWh), so there is no borderline case.
+MAX_METER_DELTA_KWH = 2.0
 
 # Minimum minutes between switching the heatpump on/off to avoid short cycling
 MIN_CYCLE_MINUTES = 5
