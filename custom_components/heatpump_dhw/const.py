@@ -56,7 +56,10 @@ OPT_PREHEAT_TEMP = "preheat_temp"
 # Default option values
 DEFAULT_SOLAR_THRESHOLD_W = 500
 DEFAULT_BOOST_THRESHOLD_W = 2000
-DEFAULT_PRICE_THRESHOLD_EUR = 0.08
+# Price cap for price-driven heating, 0 = no cap. This shipped as 0,08 while no
+# code read the option, so that value was never a deliberate choice; switching
+# the default off keeps a fresh install from silently refusing to heat.
+DEFAULT_PRICE_THRESHOLD_EUR = 0.0
 DEFAULT_NORMAL_TEMP = 55.0
 DEFAULT_BOOST_TEMP = 65.0
 DEFAULT_VACATION_MIN_TEMP = 40.0
@@ -120,6 +123,15 @@ LEGIONELLA_MAX_RUN_MINUTES = 300
 
 # Weather condition strings considered "sunny" for predictive heating
 SUNNY_CONDITIONS = {"sunny", "partlycloudy", "clear-night"}
+
+# How often to fetch tomorrow's forecast. A daily forecast barely moves, and the
+# fetch is a service call rather than an attribute read, so once an hour is ample.
+WEATHER_REFRESH_MINUTES = 60
+
+# Plausible range for an all-in consumer price in €/kWh. Used to pick the scale
+# of integer price feeds, which report a fraction of a euro without saying which.
+PRICE_PLAUSIBLE_MIN_EUR = 0.01
+PRICE_PLAUSIBLE_MAX_EUR = 2.00
 
 # Specific heat of water: kJ per kg per °C
 WATER_SPECIFIC_HEAT_KJ = 4.186
