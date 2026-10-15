@@ -10,6 +10,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import dt as dt_util
@@ -94,13 +95,43 @@ from .const import (
     OPT_VACATION_MIN_TEMP,
     STORAGE_KEY,
     STORAGE_VERSION,
+    OPT_PRICE_THRESHOLD_EUR,
+    DEFAULT_PRICE_THRESHOLD_EUR,
+    PRICE_PLAUSIBLE_MAX_EUR,
+    PRICE_PLAUSIBLE_MIN_EUR,
     SUNNY_CONDITIONS,
+    WEATHER_REFRESH_MINUTES,
     TEMP_HYSTERESIS,
     UPDATE_INTERVAL,
     WATER_SPECIFIC_HEAT_KJ,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _integer_price_divisor(raw_values: list[float]) -> float:
+    """Return the divisor that turns an integer price feed into €/kWh.
+
+    Zonneplan reports the price as an integer fraction of a euro but does not
+    say which fraction, and it is not the documented millionths everywhere: the
+    feed this was tested against needs ten-millionths (3_678_023 → €0,3678023,
+    exactly what that integration's own price sensor reports), while dividing by
+    a million gave €3,68/kWh.
+
+    Picking cheap hours only compares prices with each other, so a factor ten
+    cancels out and the error stayed invisible for a long time. It does not
+    cancel out against an absolute price cap, which is what brought it to light.
+
+    The two candidates are a factor ten apart, so at most one of them can put a
+    consumer tariff inside its plausible range.
+    """
+    if not raw_values:
+        return 1_000_000.0
+    typical = median(abs(v) for v in raw_values)
+    for divisor in (1_000_000.0, 10_000_000.0):
+        if PRICE_PLAUSIBLE_MIN_EUR <= typical / divisor <= PRICE_PLAUSIBLE_MAX_EUR:
+            return divisor
+    return 10_000_000.0
 
 
 class DHWCoordinator(DataUpdateCoordinator):
@@ -118,6 +149,10 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # Runtime state
         self._active_mode: str = MODE_IDLE
+        # Tomorrow's forecast, refreshed by _refresh_tomorrow_forecast because the
+        # weather entity no longer carries it as an attribute.
+        self._tomorrow_sunny: bool = False
+        self._weather_checked: datetime | None = None
         self._heating: bool = False
         self._last_switch_time: datetime | None = None
         self._anti_block_start: datetime | None = None
@@ -402,23 +437,60 @@ class DHWCoordinator(DataUpdateCoordinator):
         return state.state in ("on", "home", "true", "True")
 
     def _weather_forecast_tomorrow_sunny(self) -> bool:
-        """Return True if tomorrow morning's forecast looks sunny."""
+        """Return True if tomorrow's forecast looks sunny, from the cache."""
+        return self._tomorrow_sunny
+
+    async def _refresh_tomorrow_forecast(self, now: datetime) -> None:
+        """Cache tomorrow's weather condition for predictive heating.
+
+        The daily forecast used to live in the weather entity's `forecast`
+        attribute. Home Assistant removed that attribute, so reading it there
+        always produced an empty list and predictive heating silently never
+        skipped a thing — it looked enabled but could not fire. The forecast now
+        comes from the weather.get_forecasts service, which is async and cannot
+        be awaited from inside the mode decision, hence the cache.
+        """
         entity_id = self.cfg.get(CONF_WEATHER_ENTITY)
         if not entity_id:
-            return False
-        state = self.hass.states.get(entity_id)
-        if not state:
-            return False
-        forecast = state.attributes.get("forecast", [])
-        tomorrow = (dt_util.now() + timedelta(days=1)).date()
+            self._tomorrow_sunny = False
+            return
+        if (
+            self._weather_checked is not None
+            and (now - self._weather_checked).total_seconds() < WEATHER_REFRESH_MINUTES * 60
+        ):
+            return
+        self._weather_checked = now
+
+        try:
+            response = await self.hass.services.async_call(
+                "weather",
+                "get_forecasts",
+                {"type": "daily"},
+                target={"entity_id": entity_id},
+                blocking=True,
+                return_response=True,
+            )
+        except HomeAssistantError as err:
+            _LOGGER.debug(
+                "DHW: weersverwachting van %s ophalen mislukt: %s", entity_id, err
+            )
+            return
+
+        forecast = (response or {}).get(entity_id, {}).get("forecast", [])
+        tomorrow = (now + timedelta(days=1)).date()
         for entry in forecast:
             try:
                 entry_date = datetime.fromisoformat(entry.get("datetime", "")).date()
             except (ValueError, TypeError):
                 continue
             if entry_date == tomorrow:
-                return entry.get("condition", "") in SUNNY_CONDITIONS
-        return False
+                self._tomorrow_sunny = entry.get("condition", "") in SUNNY_CONDITIONS
+                _LOGGER.debug(
+                    "DHW: morgen %s → zonnig=%s",
+                    entry.get("condition", "?"), self._tomorrow_sunny,
+                )
+                return
+        self._tomorrow_sunny = False
 
     # ------------------------------------------------------------------
     # Core update loop
@@ -433,6 +505,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         ambient_temp = self._ambient_temp(outside_temp)
         self._init_meter_baselines(meter_kwh)
         self._sync_switch_state(now)
+        await self._refresh_tomorrow_forecast(now)
 
         desired_mode, desired_temp = self._decide_mode(
             now, boiler_temp, surplus_w, price_eur, present
@@ -894,13 +967,19 @@ class DHWCoordinator(DataUpdateCoordinator):
         # ── Zonneplan app: attribute "forecast" [{datetime, electricity_price}] ──
         zp_forecast = _load_list(attrs.get("forecast", []))
         if zp_forecast and isinstance(zp_forecast[0], dict) and "electricity_price" in zp_forecast[0]:
-            for entry in zp_forecast:
-                if "datetime" in entry and "electricity_price" in entry:
-                    raw_entries.append({
-                        "time": entry["datetime"],
-                        "price": float(entry["electricity_price"]) / 1_000_000,
-                    })
-            fmt_name = "Zonneplan-app"
+            usable = [
+                entry for entry in zp_forecast
+                if "datetime" in entry and "electricity_price" in entry
+            ]
+            divisor = _integer_price_divisor(
+                [float(entry["electricity_price"]) for entry in usable]
+            )
+            for entry in usable:
+                raw_entries.append({
+                    "time": entry["datetime"],
+                    "price": float(entry["electricity_price"]) / divisor,
+                })
+            fmt_name = f"Zonneplan-app(/{divisor:.0f})"
 
         # ── Zonneplan template: prices_today/prices_tomorrow [{time, price}] ──
         if not raw_entries:
@@ -941,7 +1020,9 @@ class DHWCoordinator(DataUpdateCoordinator):
                 if t_key and p_key:
                     multiplier = 1.0
                     if p_key == "electricity_price":
-                        multiplier = 1 / 1_000_000
+                        multiplier = 1 / _integer_price_divisor([
+                            float(e[p_key]) for e in entries if p_key in e
+                        ])
                     elif p_key == "price_ct":
                         multiplier = 1 / 100
                     for entry in entries:
@@ -1141,6 +1222,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         boiler_temp: float | None,
         normal_temp: float,
         skip_predictive: bool = False,
+        price_eur: float | None = None,
     ) -> tuple[str, float] | None:
         """Deadline-aware price + schedule mode (merged).
 
@@ -1150,6 +1232,13 @@ class DHWCoordinator(DataUpdateCoordinator):
         price or predictive flag.
         Returns (MODE_SCHEDULE, target_temp) or None.
         """
+        # Price cap. Blocks *starting* on price grounds only: a shower that is
+        # nearly due still heats through the emergency branch below, a session
+        # already running is not cut off, and the safety modes are decided before
+        # we ever get here. 0 means no cap.
+        cap = self._opt(OPT_PRICE_THRESHOLD_EUR, DEFAULT_PRICE_THRESHOLD_EUR)
+        price_too_high = cap > 0.0 and price_eur is not None and price_eur > cap
+
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
         preheat_temp = self._opt(OPT_PREHEAT_TEMP, DEFAULT_PREHEAT_TEMP)
         upcoming = self._upcoming_showers(now, schedules, normal_temp)
@@ -1168,7 +1257,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             if hours_until * 60 <= 2 * heat_up_required:
                 return MODE_SCHEDULE, required_temp
 
-            if skip_predictive:
+            if skip_predictive or price_too_high:
                 continue
 
             result = self._in_cheap_slot_for_deadline(
@@ -1193,7 +1282,7 @@ class DHWCoordinator(DataUpdateCoordinator):
         if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
             return MODE_PRICE, normal_temp
 
-        if skip_predictive:
+        if skip_predictive or price_too_high:
             return None
 
         price_deadline = now + timedelta(hours=24)
@@ -1359,7 +1448,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         if self.price_mode_enabled and not self._vacation_active:
             predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
             skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
-            result = self._decide_price_schedule(now, boiler_temp, normal_temp, skip_predictive)
+            result = self._decide_price_schedule(
+                now, boiler_temp, normal_temp, skip_predictive, price_eur
+            )
             if result is not None:
                 return result
 
@@ -1391,8 +1482,6 @@ class DHWCoordinator(DataUpdateCoordinator):
         if self._vacation_active or not self.price_mode_enabled:
             return None
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
-        if not schedules:
-            return None
 
         boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
@@ -1436,15 +1525,35 @@ class DHWCoordinator(DataUpdateCoordinator):
                     if fallback > now:
                         candidates.append(fallback)
 
+        if not candidates:
+            future = [s for s in self._price_fallback_slots(now, boiler_temp, normal_temp) if s > now]
+            if future:
+                candidates.append(min(future))
+
         return min(candidates) if candidates else None
+
+    def _price_fallback_slots(
+        self, now: datetime, boiler_temp: float | None, normal_temp: float
+    ) -> list[datetime]:
+        """Planned slots for pure price mode — topping up to normal_temp within 24h.
+
+        Pure price mode has no shower deadline to hang a plan on, so both
+        _calc_next_heating and _calc_planned_slots used to bail out whenever the
+        shower schedule was empty (or every scheduled shower was already hot) and
+        reported that nothing was planned while a cheap block was in fact waiting.
+        Mirrors the fallback at the end of _decide_price_schedule.
+        """
+        if boiler_temp is not None and boiler_temp >= normal_temp - TEMP_HYSTERESIS:
+            return []
+        return self._planned_slots_for_deadline(
+            now, now + timedelta(hours=24), normal_temp, boiler_temp
+        )
 
     def _calc_planned_slots(self, now: datetime) -> list[str]:
         """Return ISO timestamps of all planned heating slots across upcoming shower deadlines."""
         if self._vacation_active or not self.price_mode_enabled:
             return []
         schedules = self.entry.options.get(CONF_SHOWER_SCHEDULES, [])
-        if not schedules:
-            return []
 
         boiler_temp = self._state_float(self.cfg.get(CONF_BOILER_TEMP_SENSOR))
         normal_temp = self._opt(OPT_NORMAL_TEMP, DEFAULT_NORMAL_TEMP)
@@ -1470,6 +1579,10 @@ class DHWCoordinator(DataUpdateCoordinator):
             if phase2_start < shower_dt - timedelta(minutes=heat_up_required):
                 for slot in self._planned_slots_for_deadline(phase2_start, shower_dt, required_temp, boiler_temp):
                     all_slots.add(slot.isoformat())
+
+        if not all_slots:
+            for slot in self._price_fallback_slots(now, boiler_temp, normal_temp):
+                all_slots.add(slot.isoformat())
 
         return sorted(all_slots)
 
