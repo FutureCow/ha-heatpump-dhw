@@ -1446,7 +1446,16 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # 6. Deadline-aware price + schedule (merged) — skip during vacation
         if self.price_mode_enabled and not self._vacation_active:
-            predictive = self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
+            # Passing up tonight's cheap hours because tomorrow is sunny only pays
+            # off if that surplus will actually be used, so this requires solar
+            # mode to be on. Predictive heating was dead for a long time — it read
+            # a weather attribute Home Assistant had removed — and reviving it
+            # while solar mode was off would leave the tank cold, waiting for sun
+            # the integration never harvests.
+            predictive = (
+                self._opt(OPT_PREDICTIVE_HEATING, DEFAULT_PREDICTIVE_HEATING)
+                and self.solar_mode_enabled
+            )
             skip_predictive = predictive and self._weather_forecast_tomorrow_sunny()
             result = self._decide_price_schedule(
                 now, boiler_temp, normal_temp, skip_predictive, price_eur
