@@ -58,7 +58,10 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         name="Sessie energie",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        # No state class on purpose. An energy device class rules out
+        # 'measurement', and the alternatives record long-term statistics, which
+        # a value that restarts at 0 every session does not deserve: summing it
+        # would only reproduce what monthly_kwh and yearly_kwh already track.
         icon="mdi:lightning-bolt",
     ),
     DHWSensorDescription(
@@ -76,7 +79,12 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         name="Maandelijkse energie",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        # Counts up through the month and drops back to ~0 at the rollover, which
+        # is exactly what 'total_increasing' describes. It used to be
+        # 'measurement', which an energy device class does not allow, so Home
+        # Assistant refused to keep a sum and recorded only mean/min/max —
+        # leaving the sensor unusable in the energy dashboard.
+        state_class=SensorStateClass.TOTAL_INCREASING,
         suggested_display_precision=2,
         icon="mdi:lightning-bolt",
     ),
@@ -95,7 +103,8 @@ SENSORS: tuple[DHWSensorDescription, ...] = (
         name="Jaarlijkse energie",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
+        # Same as monthly_kwh: counts up and resets, so 'total_increasing'.
+        state_class=SensorStateClass.TOTAL_INCREASING,
         suggested_display_precision=2,
         icon="mdi:lightning-bolt",
     ),
