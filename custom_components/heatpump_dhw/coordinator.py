@@ -398,6 +398,20 @@ class DHWCoordinator(DataUpdateCoordinator):
         offset = float(self._opt(OPT_BOILER_SETPOINT_OFFSET, DEFAULT_BOILER_SETPOINT_OFFSET))
         return max(TEMP_HYSTERESIS, offset)
 
+    def _wants_heat(self, boiler_temp: float | None, target_temp: float, mode: str) -> bool:
+        """Whether a temperature-driven mode should heat: start below the dead band, then finish.
+
+        The setpoint offset only says when the boiler will respond to a start. A
+        running session continues to the target, otherwise a mode aiming for 55 °C
+        with an offset of 5 stops at 50 °C. Without a reading nothing new starts,
+        and a running session is left alone.
+        """
+        running = self._heating and self._active_mode == mode
+        if boiler_temp is None:
+            return running
+        margin = TEMP_HYSTERESIS if running else self._effective_hysteresis()
+        return boiler_temp < target_temp - margin
+
     @property
     def cfg(self):
         return {**self.entry.data, **self.entry.options}
@@ -432,7 +446,9 @@ class DHWCoordinator(DataUpdateCoordinator):
         if not entity_id:
             return None
         state = self.hass.states.get(entity_id)
-        if state is None:
+        if state is None or state.state in ("unknown", "unavailable", ""):
+            # Not the same as off. A heat pump switch that drops out must not end
+            # the session, and a presence sensor that drops out is not someone leaving.
             return None
         return state.state in ("on", "home", "true", "True")
 
@@ -1232,6 +1248,14 @@ class DHWCoordinator(DataUpdateCoordinator):
         price or predictive flag.
         Returns (MODE_SCHEDULE, target_temp) or None.
         """
+        # Without a tank temperature there is nothing to plan on. An unknown reading
+        # counted as "not hot yet", so restarting the ESP that serves the sensor
+        # started a shower session on a tank at 59.8 °C.
+        if boiler_temp is None:
+            if self._heating and self._active_mode in (MODE_PRICE, MODE_SCHEDULE):
+                return self._active_mode, self._session_target_temp or normal_temp
+            return None
+
         # Price cap. Blocks *starting* on price grounds only: a shower that is
         # nearly due still heats through the emergency branch below, a session
         # already running is not cut off, and the safety modes are decided before
@@ -1376,9 +1400,12 @@ class DHWCoordinator(DataUpdateCoordinator):
                 self._legionella_timed_out = False
 
             if self._legionella_active:
+                # TEMP_HYSTERESIS, not the setpoint offset: that offset says when a
+                # boiler is willing to start. Used here it ended a 65 °C run at 60 °C
+                # and reported it as completed.
                 target_reached = (
                     boiler_temp is not None
-                    and boiler_temp >= leg_temp - self._effective_hysteresis()
+                    and boiler_temp >= leg_temp - TEMP_HYSTERESIS
                 )
                 elapsed_min = (now - self._legionella_start).total_seconds() / 60
                 timed_out = elapsed_min >= LEGIONELLA_MAX_RUN_MINUTES
@@ -1429,7 +1456,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             and not self._vacation_active
             and surplus_w is not None
             and surplus_w >= boost_threshold
-            and (boiler_temp is None or boiler_temp < boost_temp - self._effective_hysteresis())
+            and self._wants_heat(boiler_temp, boost_temp, MODE_BOOST)
         ):
             return MODE_BOOST, boost_temp
 
@@ -1440,7 +1467,7 @@ class DHWCoordinator(DataUpdateCoordinator):
             self.solar_mode_enabled
             and surplus_w is not None
             and surplus_w >= solar_threshold
-            and (boiler_temp is None or boiler_temp < solar_target - self._effective_hysteresis())
+            and self._wants_heat(boiler_temp, solar_target, MODE_SOLAR)
         ):
             return MODE_SOLAR, solar_target
 
@@ -1465,7 +1492,7 @@ class DHWCoordinator(DataUpdateCoordinator):
 
         # 7. Vacation — hold minimum temperature
         if self._vacation_active:
-            if boiler_temp is None or boiler_temp < min_temp - self._effective_hysteresis():
+            if self._wants_heat(boiler_temp, min_temp, MODE_VACATION):
                 return MODE_VACATION, min_temp
 
         return MODE_IDLE, normal_temp
