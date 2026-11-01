@@ -246,7 +246,7 @@ Alle onderstaande opties zijn instelbaar via **Instellingen → Integraties → 
 | Vakantie minimumtemperatuur (°C) | `40` | Minimumtemperatuur als vakantie modus actief is |
 | Boiler activeringsdrempel (°C onder setpoint) | `0` | Als je boiler pas reageert als de temperatuur minstens X graden onder het setpoint zit, stel dit hier in (bijv. `5`). `0` = uitgeschakeld. |
 
-> **Boiler activeringsdrempel:** Sommige warmtepompen reageren niet op een aan-commando als de boilertemperatuur al dicht bij het setpoint zit (bijv. geen actie als boiler op 47°C staat en setpoint 50°C is). Stel de drempel in op de dode zone van jouw hardware zodat de integratie niet zinloos blijft proberen.
+> **Boiler activeringsdrempel:** Sommige warmtepompen reageren niet op een aan-commando als de boilertemperatuur al dicht bij het setpoint zit (bijv. geen actie als boiler op 47°C staat en setpoint 50°C is). Stel de drempel in op de dode zone van jouw hardware zodat de integratie niet zinloos blijft proberen. De drempel bepaalt alleen of een sessie start: een lopende sessie en de legionella run gaan door tot de doeltemperatuur (min 1 °C).
 
 ### Legionella preventie
 
